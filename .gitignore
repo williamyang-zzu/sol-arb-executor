@@ -1,0 +1,16 @@
+target/
+node_modules/
+.anchor/
+test-ledger/
+.env
+*.keypair.json
+*-wallet.json
+id.json
+*.log
+dist/
+coverage/
+.DS_Store
+.idea/
+.vscode/
+*.swp
+

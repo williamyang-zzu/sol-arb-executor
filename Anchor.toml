@@ -1,0 +1,21 @@
+[toolchain]
+anchor_version = "0.31.1"
+package_manager = "npm"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+sol_arb_executor = "gi3C8ghCEhYS6D9SPuUW9VepPPtnL1sQ96ShyJ7GSsY"
+
+[programs.mainnet]
+sol_arb_executor = "gi3C8ghCEhYS6D9SPuUW9VepPPtnL1sQ96ShyJ7GSsY"
+
+[provider]
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "npm run test:ts"
+

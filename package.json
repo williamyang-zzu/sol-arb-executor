@@ -1,0 +1,41 @@
+{
+  "name": "sol-arb-executor",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "anchor build",
+    "fmt": "cargo fmt --all -- --check && prettier --check \"{scripts,tests}/**/*.ts\"",
+    "lint": "cargo clippy --workspace --all-targets -- -D warnings",
+    "test": "npm run test:rust && npm run test:ts",
+    "test:rust": "cargo test --workspace",
+    "test:ts": "tsc --outDir target/ts-tests && mocha -t 10000 \"target/ts-tests/tests/**/*.spec.js\"",
+    "typecheck": "tsc --noEmit",
+    "simulate:pump-to-meteora": "ts-node scripts/simulate-pump-to-meteora.ts",
+    "simulate:meteora-to-pump": "ts-node scripts/simulate-meteora-to-pump.ts"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "0.31.1",
+    "@meteora-ag/dlmm": "1.9.14",
+    "@solana/spl-token": "0.4.13",
+    "@solana/web3.js": "1.98.4",
+    "dotenv": "16.6.1"
+  },
+  "devDependencies": {
+    "@types/chai": "4.3.20",
+    "@types/mocha": "10.0.10",
+    "@types/node": "22.17.0",
+    "chai": "4.5.0",
+    "mocha": "10.8.2",
+    "prettier": "3.6.2",
+    "ts-mocha": "10.0.0",
+    "ts-node": "10.9.2",
+    "typescript": "5.9.2"
+  },
+  "engines": {
+    "node": ">=22 <23",
+    "npm": ">=10 <11"
+  },
+  "overrides": {
+    "rpc-websockets": "9.2.0"
+  }
+}
