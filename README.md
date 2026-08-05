@@ -117,7 +117,9 @@ hook slices.
 
 Copy `.env.example` to `.env`, populate it, and supply `ROUTE_ACCOUNTS_FILE` as
 a JSON object containing every named account printed by the script template.
-Then run:
+`ADDRESS_LOOKUP_TABLE` is also required: the account-heavy route plus compute
+budget instruction exceeds the legacy transaction size, so the scripts compile
+a v0 transaction. Then run:
 
 ```bash
 npm run simulate:pump-to-meteora
@@ -140,10 +142,10 @@ return error, units consumed, and complete logs. They refuse to send unless
   production deployment.
 - Smoke simulation requires live pool-specific fee recipient, creator, oracle,
   bitmap, and bin-array accounts supplied by the caller.
-- The local Agave 2.2.21 post-link checker currently warns that standard Solana
-  syscalls are unknown despite a successful build. See
-  `docs/protocol-versions.md`; clear this warning and run a local-validator CPI
-  smoke test before mainnet deployment or simulation.
+- The Agave 2.2.21 post-link checker warns that standard Solana syscalls are
+  unknown, but the emitted SBF has successfully executed both routes and nested
+  Token CPIs under the matching local validator. See
+  `docs/protocol-versions.md` for the exact verification boundary.
 - `npm install` currently reports transitive audit findings from the pinned
   Solana/Meteora dependency graph. Review them before using the scripts in an
   environment that handles production signing keys.

@@ -8,8 +8,9 @@ import {
   Connection,
   Keypair,
   PublicKey,
-  Transaction,
+  TransactionMessage,
   TransactionInstruction,
+  VersionedTransaction,
 } from "@solana/web3.js";
 
 export type Direction = "pump-to-meteora" | "meteora-to-pump";
@@ -26,8 +27,13 @@ function readKeypair(path: string): Keypair {
 }
 
 function readRouteAccounts(path: string): Record<string, PublicKey> {
-  const raw = JSON.parse(readFileSync(resolve(path), "utf8")) as Record<string, string>;
-  return Object.fromEntries(Object.entries(raw).map(([name, value]) => [name, new PublicKey(value)]));
+  const raw = JSON.parse(readFileSync(resolve(path), "utf8")) as Record<
+    string,
+    string
+  >;
+  return Object.fromEntries(
+    Object.entries(raw).map(([name, value]) => [name, new PublicKey(value)]),
+  );
 }
 
 function readBinArrays(): PublicKey[] {
@@ -52,6 +58,12 @@ export async function simulate(direction: Direction): Promise<void> {
   ) as Idl;
   const program = new Program(idl, provider);
   const binArrays = readBinArrays();
+  const lookupTableAddress = new PublicKey(required("ADDRESS_LOOKUP_TABLE"));
+  const lookupTableResponse =
+    await connection.getAddressLookupTable(lookupTableAddress);
+  if (!lookupTableResponse.value) {
+    throw new Error(`Address lookup table ${lookupTableAddress} was not found`);
+  }
 
   // These explicit environment values provide a visible sanity check against
   // accidental reuse of a route-accounts file for a different opportunity.
@@ -62,6 +74,7 @@ export async function simulate(direction: Direction): Promise<void> {
     meteoraPool: required("METEORA_POOL"),
     userWsolAccount: required("USER_WSOL_ACCOUNT"),
     userTokenAccount: required("USER_TOKEN_ACCOUNT"),
+    addressLookupTable: lookupTableAddress.toBase58(),
     binArrays: binArrays.map(String),
   };
 
@@ -75,7 +88,11 @@ export async function simulate(direction: Direction): Promise<void> {
       })
       .accounts(routeAccounts)
       .remainingAccounts(
-        binArrays.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+        binArrays.map((pubkey) => ({
+          pubkey,
+          isSigner: false,
+          isWritable: true,
+        })),
       )
       .instruction();
   } else {
@@ -87,21 +104,26 @@ export async function simulate(direction: Direction): Promise<void> {
       })
       .accounts(routeAccounts)
       .remainingAccounts(
-        binArrays.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+        binArrays.map((pubkey) => ({
+          pubkey,
+          isSigner: false,
+          isWritable: true,
+        })),
       )
       .instruction();
   }
 
   const latest = await connection.getLatestBlockhash("processed");
-  const transaction = new Transaction({
-    feePayer: wallet.publicKey,
-    blockhash: latest.blockhash,
-    lastValidBlockHeight: latest.lastValidBlockHeight,
-  }).add(
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-    routeIx,
-  );
-  transaction.sign(wallet);
+  const message = new TransactionMessage({
+    payerKey: wallet.publicKey,
+    recentBlockhash: latest.blockhash,
+    instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      routeIx,
+    ],
+  }).compileToV0Message([lookupTableResponse.value]);
+  const transaction = new VersionedTransaction(message);
+  transaction.sign([wallet]);
 
   console.log("Route summary", summary);
   console.log(
@@ -121,13 +143,20 @@ export async function simulate(direction: Direction): Promise<void> {
   for (const line of result.value.logs ?? []) console.log(line);
 
   if (process.env.SEND_REAL_TRANSACTION === "true") {
-    console.warn("WARNING: SEND_REAL_TRANSACTION=true; broadcasting a real transaction");
-    const signature = await connection.sendRawTransaction(transaction.serialize(), {
-      skipPreflight: false,
-      maxRetries: 0,
-    });
+    console.warn(
+      "WARNING: SEND_REAL_TRANSACTION=true; broadcasting a real transaction",
+    );
+    const signature = await connection.sendRawTransaction(
+      transaction.serialize(),
+      {
+        skipPreflight: false,
+        maxRetries: 0,
+      },
+    );
     console.log("Sent transaction", signature);
   } else {
-    console.log("Simulation only. Set SEND_REAL_TRANSACTION=true to broadcast explicitly.");
+    console.log(
+      "Simulation only. Set SEND_REAL_TRANSACTION=true to broadcast explicitly.",
+    );
   }
 }

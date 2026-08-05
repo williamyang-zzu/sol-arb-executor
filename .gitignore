@@ -9,8 +9,8 @@ id.json
 *.log
 dist/
 coverage/
+test-programs/*/Cargo.lock
 .DS_Store
 .idea/
 .vscode/
 *.swp
-

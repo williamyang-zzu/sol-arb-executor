@@ -1,13 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { expect } from "chai";
-import {
-  AnchorProvider,
-  BN,
-  Idl,
-  Program,
-  Wallet,
-} from "@coral-xyz/anchor";
+import { AnchorProvider, BN, Idl, Program, Wallet } from "@coral-xyz/anchor";
 import { Keypair, PublicKey, Connection } from "@solana/web3.js";
 
 const idl = JSON.parse(
@@ -55,12 +49,17 @@ function randomAccounts(): Record<string, PublicKey> {
     "memoProgram",
     "meteoraEventAuthority",
   ];
-  return Object.fromEntries(names.map((name) => [name, Keypair.generate().publicKey]));
+  return Object.fromEntries(
+    names.map((name) => [name, Keypair.generate().publicKey]),
+  );
 }
 
 describe("route instruction construction", () => {
   it("constructs Pump -> Meteora with ordered bin arrays", async () => {
-    const binArrays = [Keypair.generate().publicKey, Keypair.generate().publicKey];
+    const binArrays = [
+      Keypair.generate().publicKey,
+      Keypair.generate().publicKey,
+    ];
     const ix = await program.methods
       .executePumpToMeteora({
         pumpSpendableWsolIn: new BN(1_000),
@@ -69,17 +68,21 @@ describe("route instruction construction", () => {
       })
       .accounts(randomAccounts())
       .remainingAccounts(
-        binArrays.map((pubkey) => ({ pubkey, isSigner: false, isWritable: true })),
+        binArrays.map((pubkey) => ({
+          pubkey,
+          isSigner: false,
+          isWritable: true,
+        })),
       )
       .instruction();
 
     expect(ix.data.length).to.be.greaterThan(8);
-    expect(ix.keys.slice(-2).map((meta) => meta.pubkey.toBase58())).to.deep.equal(
-      binArrays.map((key) => key.toBase58()),
-    );
-    expect(ix.keys.slice(-2).every((meta) => meta.isWritable && !meta.isSigner)).to.equal(
-      true,
-    );
+    expect(
+      ix.keys.slice(-2).map((meta) => meta.pubkey.toBase58()),
+    ).to.deep.equal(binArrays.map((key) => key.toBase58()));
+    expect(
+      ix.keys.slice(-2).every((meta) => meta.isWritable && !meta.isSigner),
+    ).to.equal(true);
   });
 
   it("constructs Meteora -> Pump and serializes three u64 parameters", async () => {
@@ -91,11 +94,14 @@ describe("route instruction construction", () => {
       })
       .accounts(randomAccounts())
       .remainingAccounts([
-        { pubkey: Keypair.generate().publicKey, isSigner: false, isWritable: true },
+        {
+          pubkey: Keypair.generate().publicKey,
+          isSigner: false,
+          isWritable: true,
+        },
       ])
       .instruction();
 
     expect(ix.data.length).to.equal(8 + 8 * 3);
   });
 });
-

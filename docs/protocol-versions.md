@@ -71,11 +71,16 @@ dependencies. This is required because Agave 2.2.21 platform-tools v1.48 ships
 SBF Cargo/rustc 1.84, while newer transitive releases require edition 2024 or
 Rust 1.85+. Do not run an unreviewed blanket `cargo update`.
 
-## Build-tool warning
+## Build-tool warning and runtime verification
 
 `anchor build` succeeds and emits the SBF, IDL, and TypeScript types, but the
 installed `solana-cargo-build-sbf 2.2.21` post-link checker reports standard
 Solana symbols such as `sol_log_` and `sol_invoke_signed_rust` as "undefined and
 not known syscalls". The installed platform-tools reports v1.48/rustc 1.84.1.
-This must be resolved or disproved with a clean toolchain install and a local
-validator invocation before treating this binary as production/mainnet-ready.
+
+The emitted executor and mock fixture SBF binaries were subsequently loaded by
+Agave 2.2.21 `solana-test-validator`. Both route entrypoints, nested SPL Token
+CPIs, and a failed-second-leg rollback executed successfully. The warning is
+therefore a false positive for these exercised paths, rather than a runtime
+loader failure. A clean-toolchain build remains advisable before production,
+but the warning no longer blocks local integration testing.
