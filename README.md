@@ -56,6 +56,8 @@ flowchart LR
 - PumpSwap 和 Meteora Program ID 固定在 `constants.rs`，调用者不能替换 CPI 目标。
 - Program 会交叉检查 Pump Pool 的 base/quote mint 与 vault，以及 Meteora LB Pair 的
   token X/Y mint 与 reserve，不能只依赖调用者提供的账户顺序。
+- PumpSwap 的 `pool_v2` PDA 会按 target mint 派生校验；当前协议要求的 buyback fee
+  recipient 及其 quote-token ATA 作为固定账户传入，不占用路线 remaining accounts。
 - Meteora Bin Array 是唯一允许的 `remaining_accounts`：数量必须为 1–8，必须 writable、
   non-signer、由官方 DLMM Program 拥有，并且内嵌 `lb_pair` 必须匹配本次路线。
 - 外部协议仍会校验其 global config、oracle、event authority、fee recipient 等协议专属
@@ -89,7 +91,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 npm run typecheck
 npm run test:ts
+npm run test:integration
 ```
+
+真实协议 CPI 兼容性使用 Surfpool 单独验证。池地址仅通过环境变量提供，不写入仓库；具体
+命令和账户要求见 [tests/integration/README.md](tests/integration/README.md)。
 
 The checked-in program address is a newly generated public key only. No deploy
 keypair is committed. Before deploying, place the corresponding deployment key
@@ -101,6 +107,7 @@ program address with one controlled by your deployment process.
 The client must prepare the user's WSOL and target-token accounts. Both must be
 legacy SPL Token accounts owned by the signing user. The client must also pass
 all fixed PumpSwap and Meteora accounts named in the generated Anchor IDL.
+其中包括当前 PumpSwap 接口使用的 pool-v2 与 buyback fee 账户。
 
 Meteora bin arrays are the only route `remaining_accounts`. Their order must
 match the order expected by the DLMM instruction. Every entry must be:

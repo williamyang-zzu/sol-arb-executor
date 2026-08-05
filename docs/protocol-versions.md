@@ -1,6 +1,6 @@
 # Protocol versions
 
-Verified on 2026-08-04. Only official protocol repositories and documentation
+Verified on 2026-08-05. Only official protocol repositories and documentation
 were used.
 
 ## PumpSwap AMM
@@ -21,14 +21,15 @@ min_base_amount_out, OptionBool(false))`, discriminator
 
 The current official interface includes protocol fee recipient accounts,
 creator-vault accounts, a separate fee program/config, user/global volume
-accumulators for buys, and optional cashback remaining accounts. This MVP does
-not pass the optional cashback account and sets `track_volume=false`, but the
-fixed volume accounts required by `buy_exact_quote_in` remain present.
+accumulators for buys, a conditional `pool_v2` PDA, buyback fee accounts, and
+optional cashback remaining accounts. This MVP does not pass the optional
+cashback account and sets `track_volume=false`, but all fixed accounts and the
+current non-cashback remaining-account tail are present.
 
 The July 2026 documentation also records `virtual_quote_reserves` appended to
-the Pool account. The local validation parser reads only the stable prefix
-through pool vaults and therefore remains compatible with that append-only
-change.
+the Pool account. The local validation parser reads the stable prefix through
+`coin_creator`, which is needed to determine whether `pool_v2` is required, and
+remains compatible with fields appended after that prefix.
 
 ## Meteora DLMM
 
@@ -84,3 +85,8 @@ CPIs, and a failed-second-leg rollback executed successfully. The warning is
 therefore a false positive for these exercised paths, rather than a runtime
 loader failure. A clean-toolchain build remains advisable before production,
 but the warning no longer blocks local integration testing.
+
+The PumpSwap-to-Meteora direction was also executed successfully under Surfpool
+1.5.0 using cloned mainnet protocol accounts. The test asserted successful
+entry into both deployed protocol program IDs and final transaction success;
+pool-specific addresses remain environment-only.

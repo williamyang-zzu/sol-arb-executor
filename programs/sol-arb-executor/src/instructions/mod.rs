@@ -80,6 +80,13 @@ pub struct ExecuteRoute<'info> {
     /// CHECK: Address and executable flag are validated by the Pump adapter.
     #[account(address = PUMP_FEE_PROGRAM_ID @ ArbError::InvalidProgramId)]
     pub pump_fee_program: UncheckedAccount<'info>,
+    /// CHECK: PumpSwap pool-v2 PDA; its address is validated by the adapter when required.
+    pub pump_pool_v2: UncheckedAccount<'info>,
+    /// CHECK: PumpSwap validates this address against its global buyback recipients.
+    pub pump_buyback_fee_recipient: UncheckedAccount<'info>,
+    /// CHECK: PumpSwap validates this as the buyback recipient quote-token ATA.
+    #[account(mut)]
+    pub pump_buyback_fee_recipient_token_account: UncheckedAccount<'info>,
 
     /// CHECK: Address and executable flag are validated by the Meteora adapter.
     #[account(address = METEORA_DLMM_PROGRAM_ID @ ArbError::InvalidProgramId)]
@@ -137,6 +144,11 @@ impl<'info> ExecuteRoute<'info> {
             user_volume_accumulator: self.pump_user_volume_accumulator.to_account_info(),
             fee_config: self.pump_fee_config.to_account_info(),
             fee_program: self.pump_fee_program.to_account_info(),
+            pool_v2: self.pump_pool_v2.to_account_info(),
+            buyback_fee_recipient: self.pump_buyback_fee_recipient.to_account_info(),
+            buyback_fee_recipient_token_account: self
+                .pump_buyback_fee_recipient_token_account
+                .to_account_info(),
         }
     }
 

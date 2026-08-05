@@ -7,7 +7,21 @@ inner program invocations, token balances, compute-unit reporting, and atomic
 rollback when the second CPI fails.
 
 The fixture programs model only the token movement and failure behavior needed
-to test this executor. They do not prove compatibility with a particular live
-PumpSwap or Meteora deployment. The two simulation scripts under `scripts/`
-remain the opt-in live-account compatibility smoke tests and never broadcast
-unless `SEND_REAL_TRANSACTION=true`.
+to test this executor. Real deployed-program compatibility is covered separately
+with Surfpool, which lazily clones the supplied mainnet accounts into an isolated
+surfnet and deploys the local executor SBF there:
+
+```bash
+SURFPOOL_PUMP_POOL=<pump-pool> \
+SURFPOOL_PUMP_GLOBAL_CONFIG=<pump-global-config> \
+SURFPOOL_METEORA_POOL=<meteora-lb-pair> \
+SURFPOOL_TARGET_MINT=<optional-explicit-mint> \
+npm run test:surfpool-real
+```
+
+Use a PumpSwap/WSOL and Meteora/WSOL pair whose target mint is owned by the
+legacy SPL Token program. The test derives protocol PDAs and token accounts from
+the cloned state, creates a v0 transaction with an ALT, and asserts that both
+real protocol program IDs appear in inner CPI logs. Pool-specific addresses are
+intentionally supplied only through environment variables and are not committed.
+`SURFPOOL_MAINNET_RPC_URL` can override the default public mainnet endpoint.

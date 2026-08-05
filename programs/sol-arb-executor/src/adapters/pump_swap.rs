@@ -33,6 +33,9 @@ pub struct PumpSwapAccounts<'info> {
     pub user_volume_accumulator: AccountInfo<'info>,
     pub fee_config: AccountInfo<'info>,
     pub fee_program: AccountInfo<'info>,
+    pub pool_v2: AccountInfo<'info>,
+    pub buyback_fee_recipient: AccountInfo<'info>,
+    pub buyback_fee_recipient_token_account: AccountInfo<'info>,
 }
 
 pub fn validate(accounts: &PumpSwapAccounts<'_>) -> Result<()> {
@@ -75,6 +78,17 @@ pub fn validate(accounts: &PumpSwapAccounts<'_>) -> Result<()> {
         *accounts.pool_quote_token_account.key,
         ArbError::InvalidPool
     );
+    if pool.coin_creator != Pubkey::default() {
+        let (expected_pool_v2, _) = Pubkey::find_program_address(
+            &[b"pool-v2", accounts.base_mint.key.as_ref()],
+            &PUMP_SWAP_PROGRAM_ID,
+        );
+        require_keys_eq!(
+            expected_pool_v2,
+            *accounts.pool_v2.key,
+            ArbError::InvalidPool
+        );
+    }
     Ok(())
 }
 
@@ -90,7 +104,7 @@ pub fn buy_exact_quote_in(
     data.extend_from_slice(&min_base_amount_out.to_le_bytes());
     data.push(0); // OptionBool(false): do not track volume in this MVP.
 
-    let metas = vec![
+    let mut metas = vec![
         AccountMeta::new(*accounts.pool.key, false),
         AccountMeta::new(*accounts.user.key, true),
         AccountMeta::new_readonly(*accounts.global_config.key, false),
@@ -115,6 +129,7 @@ pub fn buy_exact_quote_in(
         AccountMeta::new_readonly(*accounts.fee_config.key, false),
         AccountMeta::new_readonly(*accounts.fee_program.key, false),
     ];
+    append_current_remaining_accounts(accounts, &mut metas)?;
     invoke(accounts, metas, data, true)
 }
 
@@ -129,7 +144,7 @@ pub fn sell(
     data.extend_from_slice(&base_amount_in.to_le_bytes());
     data.extend_from_slice(&min_quote_amount_out.to_le_bytes());
 
-    let metas = vec![
+    let mut metas = vec![
         AccountMeta::new(*accounts.pool.key, false),
         AccountMeta::new(*accounts.user.key, true),
         AccountMeta::new_readonly(*accounts.global_config.key, false),
@@ -152,7 +167,27 @@ pub fn sell(
         AccountMeta::new_readonly(*accounts.fee_config.key, false),
         AccountMeta::new_readonly(*accounts.fee_program.key, false),
     ];
+    append_current_remaining_accounts(accounts, &mut metas)?;
     invoke(accounts, metas, data, false)
+}
+
+fn append_current_remaining_accounts(
+    accounts: &PumpSwapAccounts<'_>,
+    metas: &mut Vec<AccountMeta>,
+) -> Result<()> {
+    let pool = parse_pump_pool(&accounts.pool.try_borrow_data()?)?;
+    if pool.coin_creator != Pubkey::default() {
+        metas.push(AccountMeta::new_readonly(*accounts.pool_v2.key, false));
+    }
+    metas.push(AccountMeta::new_readonly(
+        *accounts.buyback_fee_recipient.key,
+        false,
+    ));
+    metas.push(AccountMeta::new(
+        *accounts.buyback_fee_recipient_token_account.key,
+        false,
+    ));
+    Ok(())
 }
 
 fn invoke(
@@ -193,5 +228,11 @@ fn invoke(
     }
     infos.push(accounts.fee_config.clone());
     infos.push(accounts.fee_program.clone());
+    let pool = parse_pump_pool(&accounts.pool.try_borrow_data()?)?;
+    if pool.coin_creator != Pubkey::default() {
+        infos.push(accounts.pool_v2.clone());
+    }
+    infos.push(accounts.buyback_fee_recipient.clone());
+    infos.push(accounts.buyback_fee_recipient_token_account.clone());
     anchor_lang::solana_program::program::invoke(&instruction, &infos).map_err(Into::into)
 }

@@ -270,7 +270,8 @@ describe("local-validator SBF CPI integration", function () {
       Keypair.generate(),
     );
 
-    const pumpPoolData = Buffer.alloc(203);
+    // Current stable Pool prefix extends through coin_creator at offset 211.
+    const pumpPoolData = Buffer.alloc(243);
     PUMP_POOL_DISCRIMINATOR.copy(pumpPoolData, 0);
     targetMint.toBuffer().copy(pumpPoolData, 43);
     NATIVE_MINT.toBuffer().copy(pumpPoolData, 75);
@@ -347,6 +348,9 @@ describe("local-validator SBF CPI integration", function () {
       pumpUserVolumeAccumulator: await createSystemAccount(),
       pumpFeeConfig: await createSystemAccount(),
       pumpFeeProgram: PUMP_FEE_PROGRAM,
+      pumpPoolV2: await createSystemAccount(),
+      pumpBuybackFeeRecipient: await createSystemAccount(),
+      pumpBuybackFeeRecipientTokenAccount: await createSystemAccount(),
       meteoraProgram: METEORA_PROGRAM,
       meteoraLbPair,
       meteoraBinArrayBitmapExtension: meteoraBitmap,

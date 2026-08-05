@@ -10,7 +10,8 @@
     "test:rust": "cargo test --workspace",
     "test:ts": "tsc --outDir target/ts-tests && mocha -t 10000 \"target/ts-tests/tests/instruction-construction.spec.js\"",
     "test:integration": "bash scripts/run-local-integration.sh",
-    "test:integration:client": "tsc --outDir target/ts-integration && mocha -t 120000 \"target/ts-integration/tests/integration/**/*.spec.js\"",
+    "test:integration:client": "tsc --outDir target/ts-integration && mocha -t 120000 \"target/ts-integration/tests/integration/local-validator.spec.js\"",
+    "test:surfpool-real": "anchor build && mocha -r ts-node/register -t 180000 tests/integration/surfpool-real.spec.ts",
     "typecheck": "tsc --noEmit",
     "simulate:pump-to-meteora": "ts-node scripts/simulate-pump-to-meteora.ts",
     "simulate:meteora-to-pump": "ts-node scripts/simulate-meteora-to-pump.ts"
@@ -23,6 +24,9 @@
     "dotenv": "16.6.1"
   },
   "devDependencies": {
+    "@pump-fun/pump-sdk": "1.36.0",
+    "@pump-fun/pump-swap-sdk": "1.19.0",
+    "@solana/surfpool": "1.5.0",
     "@types/chai": "4.3.20",
     "@types/mocha": "10.0.10",
     "@types/node": "22.17.0",

@@ -15,7 +15,8 @@ const PUMP_BASE_MINT_OFFSET: usize = 43;
 const PUMP_QUOTE_MINT_OFFSET: usize = 75;
 const PUMP_BASE_VAULT_OFFSET: usize = 139;
 const PUMP_QUOTE_VAULT_OFFSET: usize = 171;
-const PUMP_REQUIRED_PREFIX_LEN: usize = PUMP_QUOTE_VAULT_OFFSET + 32;
+const PUMP_COIN_CREATOR_OFFSET: usize = 211;
+const PUMP_REQUIRED_PREFIX_LEN: usize = PUMP_COIN_CREATOR_OFFSET + 32;
 
 // Stable repr(C) prefix offsets in Meteora LbPair, including the discriminator.
 const METEORA_TOKEN_X_MINT_OFFSET: usize = 88;
@@ -34,6 +35,7 @@ pub struct PumpPoolPrefix {
     pub quote_mint: Pubkey,
     pub base_vault: Pubkey,
     pub quote_vault: Pubkey,
+    pub coin_creator: Pubkey,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -72,6 +74,7 @@ pub fn parse_pump_pool(data: &[u8]) -> Result<PumpPoolPrefix> {
         quote_mint: read_pubkey(data, PUMP_QUOTE_MINT_OFFSET)?,
         base_vault: read_pubkey(data, PUMP_BASE_VAULT_OFFSET)?,
         quote_vault: read_pubkey(data, PUMP_QUOTE_VAULT_OFFSET)?,
+        coin_creator: read_pubkey(data, PUMP_COIN_CREATOR_OFFSET)?,
     })
 }
 
@@ -164,16 +167,19 @@ mod tests {
             Pubkey::new_unique(),
             Pubkey::new_unique(),
             Pubkey::new_unique(),
+            Pubkey::new_unique(),
         ];
         put_pubkey(&mut data, PUMP_BASE_MINT_OFFSET, keys[0]);
         put_pubkey(&mut data, PUMP_QUOTE_MINT_OFFSET, keys[1]);
         put_pubkey(&mut data, PUMP_BASE_VAULT_OFFSET, keys[2]);
         put_pubkey(&mut data, PUMP_QUOTE_VAULT_OFFSET, keys[3]);
+        put_pubkey(&mut data, PUMP_COIN_CREATOR_OFFSET, keys[4]);
         let parsed = parse_pump_pool(&data).unwrap();
         assert_eq!(parsed.base_mint, keys[0]);
         assert_eq!(parsed.quote_mint, keys[1]);
         assert_eq!(parsed.base_vault, keys[2]);
         assert_eq!(parsed.quote_vault, keys[3]);
+        assert_eq!(parsed.coin_creator, keys[4]);
     }
 
     #[test]
