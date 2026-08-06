@@ -20,8 +20,9 @@ npm run test:surfpool-real
 ```
 
 Use a PumpSwap/WSOL and Meteora/WSOL pair whose target mint is owned by the
-legacy SPL Token program. The test derives protocol PDAs and token accounts from
-the cloned state, creates a v0 transaction with an ALT, and asserts that both
-real protocol program IDs appear in inner CPI logs. Pool-specific addresses are
-intentionally supplied only through environment variables and are not committed.
+legacy SPL Token program. The tests derive protocol PDAs and token accounts from
+the cloned state, create v0 transactions with ALTs, and execute both route
+directions. Each direction asserts that both real protocol program IDs appear
+in inner CPI logs. Pool-specific addresses are intentionally supplied only
+through environment variables and are not committed.
 `SURFPOOL_MAINNET_RPC_URL` can override the default public mainnet endpoint.

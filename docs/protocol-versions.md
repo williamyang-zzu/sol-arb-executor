@@ -86,7 +86,8 @@ therefore a false positive for these exercised paths, rather than a runtime
 loader failure. A clean-toolchain build remains advisable before production,
 but the warning no longer blocks local integration testing.
 
-The PumpSwap-to-Meteora direction was also executed successfully under Surfpool
-1.5.0 using cloned mainnet protocol accounts. The test asserted successful
-entry into both deployed protocol program IDs and final transaction success;
-pool-specific addresses remain environment-only.
+Both PumpSwap-to-Meteora and Meteora-to-Pump directions were also executed
+successfully under Surfpool 1.5.0 using cloned mainnet protocol accounts. Each
+test asserted successful entry into both deployed protocol program IDs, final
+transaction success, and expected user-token balance changes; pool-specific
+addresses remain environment-only.
