@@ -40,7 +40,7 @@ const METEORA_PROGRAM_ID = new PublicKey(
   "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
 );
 const EXECUTOR_PROGRAM_ID = new PublicKey(
-  "gi3C8ghCEhYS6D9SPuUW9VepPPtnL1sQ96ShyJ7GSsY",
+  "RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51",
 );
 
 function required(name: string): string {
@@ -91,12 +91,20 @@ describe("Surfpool real-protocol CPI compatibility", function () {
   async function sendLegacy(
     ...instructions: TransactionInstruction[]
   ): Promise<string> {
-    return sendAndConfirmTransaction(
-      connection,
-      new Transaction().add(...instructions),
-      [trader],
-      { commitment: "processed", preflightCommitment: "processed" },
-    );
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await sendAndConfirmTransaction(
+          connection,
+          new Transaction().add(...instructions),
+          [trader],
+          { commitment: "processed", preflightCommitment: "processed" },
+        );
+      } catch (error) {
+        const blockhashExpired = String(error).includes("Blockhash not found");
+        if (!blockhashExpired || attempt === 2) throw error;
+      }
+    }
+    throw new Error("unreachable Surfpool transaction retry state");
   }
 
   async function createLookupTable(

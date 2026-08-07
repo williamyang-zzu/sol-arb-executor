@@ -19,7 +19,7 @@ solana-test-validator \
   --quiet \
   --ledger "$ledger_dir" \
   --rpc-port "$rpc_port" \
-  --bpf-program gi3C8ghCEhYS6D9SPuUW9VepPPtnL1sQ96ShyJ7GSsY "$executor_so" \
+  --bpf-program RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51 "$executor_so" \
   --bpf-program pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA "$mock_so" \
   --bpf-program pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ "$mock_so" \
   --bpf-program LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo "$mock_so" \
@@ -43,4 +43,3 @@ done
 
 echo "local validator did not become ready; see $validator_log" >&2
 exit 1
-
