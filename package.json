@@ -14,7 +14,8 @@
     "test:surfpool-real": "anchor build && mocha --exit -r ts-node/register -t 180000 tests/integration/surfpool-real.spec.ts",
     "typecheck": "tsc --noEmit",
     "simulate:pump-to-meteora": "ts-node scripts/simulate-pump-to-meteora.ts",
-    "simulate:meteora-to-pump": "ts-node scripts/simulate-meteora-to-pump.ts"
+    "simulate:meteora-to-pump": "ts-node scripts/simulate-meteora-to-pump.ts",
+    "smoke:mainnet": "ts-node scripts/mainnet-smoke.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "0.31.1",
