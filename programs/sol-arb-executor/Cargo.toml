@@ -22,9 +22,7 @@ anchor-lang = "=0.31.1"
 anchor-spl = { version = "=0.31.1", default-features = false, features = [
     "associated_token",
     "token",
-    # Anchor SPL 0.31.1's idl-build module references token_interface
-    # unconditionally, so token_2022 is required to generate the IDL even
-    # though this program rejects Token-2022 accounts at runtime.
+    # TokenInterface accepts both the legacy SPL Token program and Token-2022.
     "token_2022",
 ] }
 

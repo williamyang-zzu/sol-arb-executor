@@ -88,7 +88,7 @@ pub fn swap2<'info>(
     data.extend_from_slice(&amount_in.to_le_bytes());
     data.extend_from_slice(&min_amount_out.to_le_bytes());
     // RemainingAccountsInfo { slices: [TransferHookX(0), TransferHookY(1)] }.
-    // Both lengths are zero because this MVP rejects Token-2022.
+    // Both lengths are zero because supported Token-2022 mints cannot use hooks.
     data.extend_from_slice(&2_u32.to_le_bytes());
     data.extend_from_slice(&[0, 0, 1, 0]);
 

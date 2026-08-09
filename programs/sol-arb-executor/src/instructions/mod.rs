@@ -5,7 +5,7 @@ pub mod pump_to_meteora;
 use anchor_lang::prelude::*;
 use anchor_spl::{
     associated_token::AssociatedToken,
-    token::{Mint, Token, TokenAccount},
+    token_interface::{Mint, TokenAccount, TokenInterface},
 };
 
 use crate::{
@@ -23,24 +23,26 @@ pub struct ExecuteRoute<'info> {
     pub trader: Signer<'info>,
 
     #[account(address = WSOL_MINT)]
-    pub wsol_mint: Account<'info, Mint>,
+    pub wsol_mint: InterfaceAccount<'info, Mint>,
     #[account(constraint = target_mint.key() != WSOL_MINT @ ArbError::InvalidTokenMint)]
-    pub target_mint: Account<'info, Mint>,
+    pub target_mint: InterfaceAccount<'info, Mint>,
 
     #[account(
         mut,
         constraint = user_wsol.owner == trader.key() @ ArbError::InvalidTokenAccountOwner,
         constraint = user_wsol.mint == wsol_mint.key() @ ArbError::InvalidTokenMint,
     )]
-    pub user_wsol: Account<'info, TokenAccount>,
+    pub user_wsol: InterfaceAccount<'info, TokenAccount>,
     #[account(
         mut,
         constraint = user_target.owner == trader.key() @ ArbError::InvalidTokenAccountOwner,
         constraint = user_target.mint == target_mint.key() @ ArbError::InvalidTokenMint,
     )]
-    pub user_target: Account<'info, TokenAccount>,
+    pub user_target: InterfaceAccount<'info, TokenAccount>,
 
-    pub token_program: Program<'info, Token>,
+    #[account(address = anchor_spl::token::ID @ ArbError::UnsupportedTokenProgram)]
+    pub wsol_token_program: Interface<'info, TokenInterface>,
+    pub target_token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
     pub associated_token_program: Program<'info, AssociatedToken>,
 
@@ -132,8 +134,8 @@ impl<'info> ExecuteRoute<'info> {
             protocol_fee_recipient_token_account: self
                 .pump_protocol_fee_recipient_token_account
                 .to_account_info(),
-            base_token_program: self.token_program.to_account_info(),
-            quote_token_program: self.token_program.to_account_info(),
+            base_token_program: self.target_token_program.to_account_info(),
+            quote_token_program: self.wsol_token_program.to_account_info(),
             system_program: self.system_program.to_account_info(),
             associated_token_program: self.associated_token_program.to_account_info(),
             event_authority: self.pump_event_authority.to_account_info(),
@@ -164,15 +166,19 @@ impl<'info> ExecuteRoute<'info> {
             .and_then(|data| crate::utils::account_validation::parse_meteora_pair(&data).ok())
             .map(|pair| pair.token_x_mint == self.target_mint.key())
             .unwrap_or(false);
-        let (token_x, token_y) = if target_is_x {
+        let (token_x, token_y, token_x_program, token_y_program) = if target_is_x {
             (
                 self.target_mint.to_account_info(),
                 self.wsol_mint.to_account_info(),
+                self.target_token_program.to_account_info(),
+                self.wsol_token_program.to_account_info(),
             )
         } else {
             (
                 self.wsol_mint.to_account_info(),
                 self.target_mint.to_account_info(),
+                self.wsol_token_program.to_account_info(),
+                self.target_token_program.to_account_info(),
             )
         };
         MeteoraAccounts {
@@ -187,8 +193,8 @@ impl<'info> ExecuteRoute<'info> {
             oracle: self.meteora_oracle.to_account_info(),
             host_fee_in: self.meteora_host_fee_in.to_account_info(),
             user: self.trader.to_account_info(),
-            token_x_program: self.token_program.to_account_info(),
-            token_y_program: self.token_program.to_account_info(),
+            token_x_program,
+            token_y_program,
             memo_program: self.memo_program.to_account_info(),
             event_authority: self.meteora_event_authority.to_account_info(),
             program: self.meteora_program.to_account_info(),
@@ -196,6 +202,17 @@ impl<'info> ExecuteRoute<'info> {
     }
 
     pub fn validate_route_mints(&self) -> Result<()> {
+        crate::utils::token_extensions::validate_route_token_programs(
+            &self.wsol_mint.to_account_info(),
+            &self.target_mint.to_account_info(),
+            &self.user_wsol.to_account_info(),
+            &self.user_target.to_account_info(),
+            &self.wsol_token_program.key(),
+            &self.target_token_program.key(),
+        )?;
+        crate::utils::token_extensions::validate_supported_target_mint(
+            &self.target_mint.to_account_info(),
+        )?;
         crate::utils::account_validation::validate_user_token_fields(
             &self.user_wsol.owner,
             &self.user_wsol.mint,

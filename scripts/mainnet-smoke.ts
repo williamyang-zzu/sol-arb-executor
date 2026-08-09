@@ -20,6 +20,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   NATIVE_MINT,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   createAssociatedTokenAccountIdempotentInstruction,
   createSyncNativeInstruction,
   getAccount,
@@ -42,8 +43,12 @@ import {
 } from "@solana/web3.js";
 
 const EXECUTOR = new PublicKey("RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51");
-const METEORA_PROGRAM = new PublicKey("LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo");
-const TARGET_MINT = new PublicKey("EnA53NmMzfsAs7p44dATdvT55HHUACxpEbC9AKY3pump");
+const METEORA_PROGRAM = new PublicKey(
+  "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
+);
+const TARGET_MINT = new PublicKey(
+  "EnA53NmMzfsAs7p44dATdvT55HHUACxpEbC9AKY3pump",
+);
 const PUMP_POOL = new PublicKey("CkhpkGsmbVAV5hMrFJNri9PjcSMubSgiDFFaKMYBisy3");
 const METEORA_POOL = new PublicKey(
   process.env.METEORA_POOL ?? "GsKmn6qcL13MctorxXfKeUsVLz2c91uPFWMPXPU4Whni",
@@ -75,7 +80,11 @@ async function sendLegacy(
     connection,
     new Transaction().add(...instructions),
     [signer],
-    { commitment: "confirmed", preflightCommitment: "confirmed", maxRetries: 5 },
+    {
+      commitment: "confirmed",
+      preflightCommitment: "confirmed",
+      maxRetries: 5,
+    },
   );
 }
 
@@ -84,6 +93,7 @@ async function prepareTokenAccounts(
   signer: Keypair,
   userWsol: PublicKey,
   userTarget: PublicKey,
+  targetTokenProgram: PublicKey,
 ): Promise<string | null> {
   const instructions: TransactionInstruction[] = [];
   const [wsolInfo, targetInfo] = await connection.getMultipleAccountsInfo([
@@ -107,6 +117,7 @@ async function prepareTokenAccounts(
         userTarget,
         signer.publicKey,
         TARGET_MINT,
+        targetTokenProgram,
       ),
     );
   }
@@ -185,8 +196,26 @@ async function main(): Promise<void> {
     throw new Error(`IDL program ID mismatch: ${program.programId}`);
   }
 
+  const targetMintAccount = await connection.getAccountInfo(
+    TARGET_MINT,
+    "confirmed",
+  );
+  if (!targetMintAccount)
+    throw new Error(`Target mint ${TARGET_MINT} was not found`);
+  const targetTokenProgram = targetMintAccount.owner;
+  if (
+    !targetTokenProgram.equals(TOKEN_PROGRAM_ID) &&
+    !targetTokenProgram.equals(TOKEN_2022_PROGRAM_ID)
+  ) {
+    throw new Error(`Unsupported target token program ${targetTokenProgram}`);
+  }
   const userWsol = getAssociatedTokenAddressSync(NATIVE_MINT, signer.publicKey);
-  const userTarget = getAssociatedTokenAddressSync(TARGET_MINT, signer.publicKey);
+  const userTarget = getAssociatedTokenAddressSync(
+    TARGET_MINT,
+    signer.publicKey,
+    false,
+    targetTokenProgram,
+  );
   console.log("Trader", signer.publicKey.toBase58());
   console.log("Input per direction", INPUT_LAMPORTS.toString(), "lamports");
   const setupSignature = await prepareTokenAccounts(
@@ -194,13 +223,18 @@ async function main(): Promise<void> {
     signer,
     userWsol,
     userTarget,
+    targetTokenProgram,
   );
   if (setupSignature) console.log("Account setup signature", setupSignature);
 
   const pumpProgram = getPumpAmmProgram(connection);
   const pumpPool = await pumpProgram.account.pool.fetch(PUMP_POOL);
-  const pumpGlobal = await pumpProgram.account.globalConfig.fetch(GLOBAL_CONFIG_PDA);
-  if (!pumpPool.baseMint.equals(TARGET_MINT) || !pumpPool.quoteMint.equals(NATIVE_MINT)) {
+  const pumpGlobal =
+    await pumpProgram.account.globalConfig.fetch(GLOBAL_CONFIG_PDA);
+  if (
+    !pumpPool.baseMint.equals(TARGET_MINT) ||
+    !pumpPool.quoteMint.equals(NATIVE_MINT)
+  ) {
     throw new Error("Pump pool mint relationship mismatch");
   }
   const protocolFeeRecipient = pumpGlobal.protocolFeeRecipients[0];
@@ -212,7 +246,10 @@ async function main(): Promise<void> {
   )[0];
 
   const dlmm = await DLMM.create(connection, METEORA_POOL);
-  if (!dlmm.lbPair.tokenXMint.equals(TARGET_MINT) || !dlmm.lbPair.tokenYMint.equals(NATIVE_MINT)) {
+  if (
+    !dlmm.lbPair.tokenXMint.equals(TARGET_MINT) ||
+    !dlmm.lbPair.tokenYMint.equals(NATIVE_MINT)
+  ) {
     throw new Error("Meteora pool mint relationship mismatch");
   }
   const pumpOnline = new OnlinePumpAmmSdk(connection);
@@ -223,7 +260,8 @@ async function main(): Promise<void> {
     targetMint: TARGET_MINT,
     userWsol,
     userTarget,
-    tokenProgram: TOKEN_PROGRAM_ID,
+    wsolTokenProgram: TOKEN_PROGRAM_ID,
+    targetTokenProgram,
     systemProgram: SystemProgram.programId,
     associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
     pumpProgram: PUMP_AMM_PROGRAM_ID,
@@ -384,7 +422,9 @@ async function main(): Promise<void> {
       { commitment: "confirmed" },
     );
     if (!response.value) {
-      throw new Error(`Lookup table ${process.env.ADDRESS_LOOKUP_TABLE} was not found`);
+      throw new Error(
+        `Lookup table ${process.env.ADDRESS_LOOKUP_TABLE} was not found`,
+      );
     }
     table = response.value;
   } else {
@@ -416,7 +456,8 @@ async function main(): Promise<void> {
   }
 
   for (const direction of ["pump-to-meteora", "meteora-to-pump"] as const) {
-    const built = direction === "pump-to-meteora" ? initialForward : initialReverse;
+    const built =
+      direction === "pump-to-meteora" ? initialForward : initialReverse;
     const { transaction } = await transactionFor(built.instruction);
     const result = await connection.simulateTransaction(transaction, {
       commitment: "confirmed",
@@ -434,23 +475,30 @@ async function main(): Promise<void> {
   }
 
   if (process.env.SEND_REAL_TRANSACTION !== "true") {
-    console.log("Both simulations passed. SEND_REAL_TRANSACTION is not true; stopping.");
+    console.log(
+      "Both simulations passed. SEND_REAL_TRANSACTION is not true; stopping.",
+    );
     return;
   }
 
   for (const direction of ["pump-to-meteora", "meteora-to-pump"] as const) {
     const built = await build(direction);
     const { transaction, latest } = await transactionFor(built.instruction);
-    const signature = await connection.sendRawTransaction(transaction.serialize(), {
-      skipPreflight: false,
-      maxRetries: 5,
-    });
+    const signature = await connection.sendRawTransaction(
+      transaction.serialize(),
+      {
+        skipPreflight: false,
+        maxRetries: 5,
+      },
+    );
     const confirmation = await connection.confirmTransaction(
       { signature, ...latest },
       "confirmed",
     );
     if (confirmation.value.err) {
-      throw new Error(`${direction} transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+      throw new Error(
+        `${direction} transaction failed: ${JSON.stringify(confirmation.value.err)}`,
+      );
     }
     const details = await connection.getTransaction(signature, {
       commitment: "confirmed",

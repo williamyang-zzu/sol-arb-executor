@@ -16,6 +16,7 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   NATIVE_MINT,
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   getAccount,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
@@ -145,6 +146,16 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     return response.value;
   }
 
+  async function tokenProgramForMint(mint: PublicKey): Promise<PublicKey> {
+    const mintAccount = await connection.getAccountInfo(mint, "processed");
+    if (!mintAccount) throw new Error(`Mint ${mint} was not found`);
+    expect(
+      mintAccount.owner.equals(TOKEN_PROGRAM_ID) ||
+        mintAccount.owner.equals(TOKEN_2022_PROGRAM_ID),
+    ).to.equal(true);
+    return mintAccount.owner;
+  }
+
   it("executes PumpSwap buy followed by Meteora DLMM swap2", async () => {
     const pumpPoolAddress = new PublicKey(required("SURFPOOL_PUMP_POOL"));
     const pumpGlobalAddress = new PublicKey(
@@ -158,6 +169,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     const targetMint = process.env.SURFPOOL_TARGET_MINT
       ? new PublicKey(process.env.SURFPOOL_TARGET_MINT)
       : pumpPool.baseMint;
+    const targetTokenProgram = await tokenProgramForMint(targetMint);
 
     surfnet.fundToken(
       trader.publicKey.toBase58(),
@@ -168,12 +180,17 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       trader.publicKey.toBase58(),
       targetMint.toBase58(),
       1_000_000_000,
+      targetTokenProgram.toBase58(),
     );
     const userWsol = new PublicKey(
       surfnet.getAta(trader.publicKey.toBase58(), NATIVE_MINT.toBase58()),
     );
     const userTarget = new PublicKey(
-      surfnet.getAta(trader.publicKey.toBase58(), targetMint.toBase58()),
+      surfnet.getAta(
+        trader.publicKey.toBase58(),
+        targetMint.toBase58(),
+        targetTokenProgram.toBase58(),
+      ),
     );
 
     const pumpGlobal =
@@ -201,7 +218,8 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       targetMint,
       userWsol,
       userTarget,
-      tokenProgram: TOKEN_PROGRAM_ID,
+      wsolTokenProgram: TOKEN_PROGRAM_ID,
+      targetTokenProgram,
       systemProgram: SystemProgram.programId,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       pumpProgram: PUMP_AMM_PROGRAM_ID,
@@ -324,6 +342,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     const targetMint = process.env.SURFPOOL_TARGET_MINT
       ? new PublicKey(process.env.SURFPOOL_TARGET_MINT)
       : pumpPool.baseMint;
+    const targetTokenProgram = await tokenProgramForMint(targetMint);
 
     surfnet.fundToken(
       trader.publicKey.toBase58(),
@@ -334,12 +353,17 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       trader.publicKey.toBase58(),
       targetMint.toBase58(),
       1_000_000_000,
+      targetTokenProgram.toBase58(),
     );
     const userWsol = new PublicKey(
       surfnet.getAta(trader.publicKey.toBase58(), NATIVE_MINT.toBase58()),
     );
     const userTarget = new PublicKey(
-      surfnet.getAta(trader.publicKey.toBase58(), targetMint.toBase58()),
+      surfnet.getAta(
+        trader.publicKey.toBase58(),
+        targetMint.toBase58(),
+        targetTokenProgram.toBase58(),
+      ),
     );
 
     const pumpGlobal =
@@ -368,7 +392,8 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       targetMint,
       userWsol,
       userTarget,
-      tokenProgram: TOKEN_PROGRAM_ID,
+      wsolTokenProgram: TOKEN_PROGRAM_ID,
+      targetTokenProgram,
       systemProgram: SystemProgram.programId,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
       pumpProgram: PUMP_AMM_PROGRAM_ID,
@@ -435,7 +460,9 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       ...binArrays.map(({ publicKey }) => publicKey),
     ]);
     const initialWsol = (await getAccount(connection, userWsol)).amount;
-    const initialTarget = (await getAccount(connection, userTarget)).amount;
+    const initialTarget = (
+      await getAccount(connection, userTarget, undefined, targetTokenProgram)
+    ).amount;
     const latest = await connection.getLatestBlockhash("processed");
     const message = new TransactionMessage({
       payerKey: trader.publicKey,
@@ -474,9 +501,10 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     expect((await getAccount(connection, userWsol)).amount).not.to.equal(
       initialWsol,
     );
-    expect((await getAccount(connection, userTarget)).amount).to.equal(
-      initialTarget,
-    );
+    expect(
+      (await getAccount(connection, userTarget, undefined, targetTokenProgram))
+        .amount,
+    ).to.equal(initialTarget);
     console.log(
       `Surfpool reverse real CPI consumed ${String(result?.meta?.computeUnitsConsumed)} CU`,
     );

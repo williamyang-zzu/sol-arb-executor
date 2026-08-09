@@ -18,8 +18,10 @@ pub enum ArbError {
     BalanceDidNotIncreaseAsExpected,
     #[msg("Checked integer arithmetic failed")]
     ArithmeticOverflow,
-    #[msg("Only the legacy SPL Token program is supported by this MVP")]
+    #[msg("The token program is unsupported or does not own the supplied mint/account")]
     UnsupportedTokenProgram,
+    #[msg("The Token-2022 mint contains an unsupported extension")]
+    UnsupportedTokenExtension,
     #[msg("The fixed route accounts are inconsistent with the selected direction")]
     InvalidRouteAccounts,
     #[msg("A foreign protocol account is shorter than its verified IDL layout")]

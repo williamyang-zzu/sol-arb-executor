@@ -41,6 +41,7 @@ flowchart LR
 | `adapters/pump_swap.rs` | PumpSwap Pool 验证、指令编码和 CPI 封装。 |
 | `adapters/meteora_dlmm.rs` | Meteora LB Pair、Bitmap、Bin Array 验证及 CPI 封装。 |
 | `utils/account_validation.rs` | 解析外部协议账户的稳定字段前缀，校验 mint、vault/reserve、owner、discriminator 和池归属。 |
+| `utils/token_extensions.rs` | 绑定 Mint、Token Account 与 Token Program，并对白名单内的基础 Token-2022 扩展放行。 |
 | `utils/balance.rs` | 使用 checked arithmetic 计算 reload 前后的正向余额增量。 |
 | `constants.rs` | 固定 WSOL Mint、DEX Program、Fee Program 和 Memo Program 地址。 |
 | `errors.rs` | 集中定义账户、池、余额和算术错误。 |
@@ -51,8 +52,12 @@ flowchart LR
 
 ### 账户与信任边界
 
-- `trader` 必须签名；`user_wsol` 和 `user_target` 必须是由该地址拥有、mint 匹配的
-  Legacy SPL Token 账户。
+- `trader` 必须签名；`user_wsol` 和 `user_target` 必须由该地址拥有且 mint 匹配。
+  WSOL 固定使用 Legacy SPL Token；目标币可使用 Legacy SPL Token 或受支持的 Token-2022。
+- `wsol_token_program` 固定为 `Tokenkeg...`；`target_token_program` 必须与目标 Mint 和
+  目标 Token Account 的链上 owner 一致，且只能是 `Tokenkeg...` 或 `TokenzQd...`。
+- Token-2022 目标 Mint 当前仅允许 `MetadataPointer` 和 `TokenMetadata`；任何其他扩展
+  都会在进入 DEX CPI 前被明确拒绝。
 - PumpSwap 和 Meteora Program ID 固定在 `constants.rs`，调用者不能替换 CPI 目标。
 - Program 会交叉检查 Pump Pool 的 base/quote mint 与 vault，以及 Meteora LB Pair 的
   token X/Y mint 与 reserve，不能只依赖调用者提供的账户顺序。
@@ -104,9 +109,12 @@ program address with one controlled by your deployment process.
 
 ## Required accounts
 
-The client must prepare the user's WSOL and target-token accounts. Both must be
-legacy SPL Token accounts owned by the signing user. The client must also pass
-all fixed PumpSwap and Meteora accounts named in the generated Anchor IDL.
+The client must prepare the user's WSOL and target-token accounts. WSOL uses the
+legacy SPL Token program. The target account must use the same program that owns
+the target mint: either legacy SPL Token or the supported Token-2022 subset. The
+client passes these separately as `wsol_token_program` and
+`target_token_program`, plus all fixed PumpSwap and Meteora accounts named in
+the generated Anchor IDL.
 其中包括当前 PumpSwap 接口使用的 pool-v2 与 buyback fee 账户。
 
 Meteora bin arrays are the only route `remaining_accounts`. Their order must
@@ -116,9 +124,8 @@ match the order expected by the DLMM instruction. Every entry must be:
 2. owned by the official Meteora DLMM program;
 3. a `BinArray` account whose embedded `lb_pair` equals `meteora_lb_pair`.
 
-Transfer-hook accounts must not be mixed into this list. The MVP permits only
-the legacy SPL Token program, so Meteora `swap2` encodes zero-length transfer
-hook slices.
+Transfer-hook accounts must not be mixed into this list. Transfer Hook mints are
+rejected, so Meteora `swap2` encodes zero-length transfer-hook slices.
 
 ## Simulation
 
@@ -142,8 +149,11 @@ return error, units consumed, and complete logs. They refuse to send unless
 - CPI targets are hard-coded to the official PumpSwap and Meteora program IDs.
 - Pool mint/vault relations and bin-array ownership are checked before CPI.
 - No ATA creation or SOL wrapping/unwrapping occurs inside the program.
-- Token-2022, transfer hooks, Pump cashback remaining accounts, and Meteora host
-  fees are not supported in the MVP.
+- Token-2022 is limited to mints whose extension set contains only
+  `MetadataPointer` and/or `TokenMetadata`. Transfer Fee, Transfer Hook and all
+  other Token-2022 extensions are rejected until explicitly implemented.
+- Pump cashback remaining accounts and Meteora host fees are not supported in
+  the current route interface.
 - The PumpSwap IDL evolves frequently (fee program, creator vault, volume
   accumulators, virtual quote reserves); re-run the protocol audit before a
   production deployment.
