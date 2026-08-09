@@ -47,13 +47,15 @@ const METEORA_PROGRAM = new PublicKey(
   "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
 );
 const TARGET_MINT = new PublicKey(
-  "EnA53NmMzfsAs7p44dATdvT55HHUACxpEbC9AKY3pump",
+  process.env.TARGET_MINT ?? "EnA53NmMzfsAs7p44dATdvT55HHUACxpEbC9AKY3pump",
 );
-const PUMP_POOL = new PublicKey("CkhpkGsmbVAV5hMrFJNri9PjcSMubSgiDFFaKMYBisy3");
+const PUMP_POOL = new PublicKey(
+  process.env.PUMP_POOL ?? "CkhpkGsmbVAV5hMrFJNri9PjcSMubSgiDFFaKMYBisy3",
+);
 const METEORA_POOL = new PublicKey(
   process.env.METEORA_POOL ?? "GsKmn6qcL13MctorxXfKeUsVLz2c91uPFWMPXPU4Whni",
 );
-const INPUT_LAMPORTS = new BN(5_000_000);
+const INPUT_LAMPORTS = new BN(process.env.INPUT_LAMPORTS ?? "5000000");
 const SLIPPAGE_PERCENT = 5;
 const METEORA_SLIPPAGE_BPS = new BN(SLIPPAGE_PERCENT * 100);
 const DESIRED_WSOL_BALANCE = 12_000_000n;
@@ -482,33 +484,65 @@ async function main(): Promise<void> {
   }
 
   for (const direction of ["pump-to-meteora", "meteora-to-pump"] as const) {
-    const built = await build(direction);
-    const { transaction, latest } = await transactionFor(built.instruction);
-    const signature = await connection.sendRawTransaction(
-      transaction.serialize(),
-      {
-        skipPreflight: false,
-        maxRetries: 5,
-      },
-    );
-    const confirmation = await connection.confirmTransaction(
-      { signature, ...latest },
-      "confirmed",
-    );
-    if (confirmation.value.err) {
-      throw new Error(
-        `${direction} transaction failed: ${JSON.stringify(confirmation.value.err)}`,
-      );
+    let confirmed = false;
+    for (let attempt = 1; attempt <= 3 && !confirmed; attempt += 1) {
+      const built = await build(direction);
+      const { transaction, latest } = await transactionFor(built.instruction);
+      let signature: string | undefined;
+      try {
+        signature = await connection.sendRawTransaction(
+          transaction.serialize(),
+          {
+            skipPreflight: false,
+            maxRetries: 5,
+          },
+        );
+        const confirmation = await connection.confirmTransaction(
+          { signature, ...latest },
+          "confirmed",
+        );
+        if (confirmation.value.err) {
+          throw new Error(
+            `${direction} transaction failed: ${JSON.stringify(confirmation.value.err)}`,
+          );
+        }
+      } catch (error) {
+        if (signature) {
+          const status = (
+            await connection.getSignatureStatuses([signature], {
+              searchTransactionHistory: true,
+            })
+          ).value[0];
+          if (status?.err) throw error;
+          if (
+            status?.confirmationStatus === "confirmed" ||
+            status?.confirmationStatus === "finalized"
+          ) {
+            confirmed = true;
+          }
+        }
+        if (!confirmed && attempt === 3) throw error;
+        if (!confirmed) {
+          console.log(`Retrying ${direction} with a fresh blockhash`, {
+            attempt,
+            previousSignature: signature,
+          });
+          continue;
+        }
+      }
+      if (!signature)
+        throw new Error(`${direction} did not return a signature`);
+      confirmed = true;
+      const details = await connection.getTransaction(signature, {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      });
+      console.log("Confirmed transaction", direction, {
+        signature,
+        unitsConsumed: details?.meta?.computeUnitsConsumed,
+        quote: built.quote,
+      });
     }
-    const details = await connection.getTransaction(signature, {
-      commitment: "confirmed",
-      maxSupportedTransactionVersion: 0,
-    });
-    console.log("Confirmed transaction", direction, {
-      signature,
-      unitsConsumed: details?.meta?.computeUnitsConsumed,
-      quote: built.quote,
-    });
   }
 }
 
