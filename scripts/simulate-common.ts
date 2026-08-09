@@ -82,9 +82,8 @@ export async function simulate(direction: Direction): Promise<void> {
   if (direction === "pump-to-meteora") {
     routeIx = await program.methods
       .executePumpToMeteora({
-        pumpSpendableWsolIn: new BN(required("WSOL_AMOUNT_IN")),
-        pumpMinTargetOut: new BN(required("MIN_TARGET_AMOUNT_OUT")),
-        meteoraMinWsolOut: new BN(required("MIN_WSOL_AMOUNT_OUT")),
+        wsolAmountIn: new BN(required("WSOL_AMOUNT_IN")),
+        minProfitLamports: new BN(required("MIN_PROFIT_LAMPORTS")),
       })
       .accounts(routeAccounts)
       .remainingAccounts(
@@ -98,9 +97,8 @@ export async function simulate(direction: Direction): Promise<void> {
   } else {
     routeIx = await program.methods
       .executeMeteoraToPump({
-        meteoraWsolIn: new BN(required("WSOL_AMOUNT_IN")),
-        meteoraMinTargetOut: new BN(required("MIN_TARGET_AMOUNT_OUT")),
-        pumpMinWsolOut: new BN(required("MIN_WSOL_AMOUNT_OUT")),
+        wsolAmountIn: new BN(required("WSOL_AMOUNT_IN")),
+        minProfitLamports: new BN(required("MIN_PROFIT_LAMPORTS")),
       })
       .accounts(routeAccounts)
       .remainingAccounts(

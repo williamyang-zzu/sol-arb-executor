@@ -66,9 +66,8 @@ describe("route instruction construction", () => {
     ];
     const ix = await program.methods
       .executePumpToMeteora({
-        pumpSpendableWsolIn: new BN(1_000),
-        pumpMinTargetOut: new BN(900),
-        meteoraMinWsolOut: new BN(950),
+        wsolAmountIn: new BN(1_000),
+        minProfitLamports: new BN(100),
       })
       .accounts(randomAccounts())
       .remainingAccounts(
@@ -89,12 +88,11 @@ describe("route instruction construction", () => {
     ).to.equal(true);
   });
 
-  it("constructs Meteora -> Pump and serializes three u64 parameters", async () => {
+  it("constructs Meteora -> Pump and serializes two u64 parameters", async () => {
     const ix = await program.methods
       .executeMeteoraToPump({
-        meteoraWsolIn: new BN(2_000),
-        meteoraMinTargetOut: new BN(1_800),
-        pumpMinWsolOut: new BN(1_900),
+        wsolAmountIn: new BN(2_000),
+        minProfitLamports: new BN(100),
       })
       .accounts(randomAccounts())
       .remainingAccounts([
@@ -106,6 +104,6 @@ describe("route instruction construction", () => {
       ])
       .instruction();
 
-    expect(ix.data.length).to.equal(8 + 8 * 3);
+    expect(ix.data.length).to.equal(8 + 8 * 2);
   });
 });

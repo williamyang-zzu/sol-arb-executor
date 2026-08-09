@@ -426,9 +426,8 @@ describe("local-validator SBF CPI integration", function () {
       .amount;
     const route = await program.methods
       .executePumpToMeteora({
-        pumpSpendableWsolIn: new BN(1_000),
-        pumpMinTargetOut: new BN(1_900),
-        meteoraMinWsolOut: new BN(3_900),
+        wsolAmountIn: new BN(1_000),
+        minProfitLamports: new BN(3_000),
       })
       .accounts(accounts)
       .remainingAccounts([
@@ -455,9 +454,8 @@ describe("local-validator SBF CPI integration", function () {
       .amount;
     const route = await program.methods
       .executeMeteoraToPump({
-        meteoraWsolIn: new BN(1_000),
-        meteoraMinTargetOut: new BN(1_900),
-        pumpMinWsolOut: new BN(3_900),
+        wsolAmountIn: new BN(1_000),
+        minProfitLamports: new BN(3_000),
       })
       .accounts(accounts)
       .remainingAccounts([
@@ -490,9 +488,8 @@ describe("local-validator SBF CPI integration", function () {
     ).amount;
     const route = await program.methods
       .executePumpToMeteora({
-        pumpSpendableWsolIn: new BN(1_000),
-        pumpMinTargetOut: new BN(1_900),
-        meteoraMinWsolOut: new BN(9_000),
+        wsolAmountIn: new BN(1_000),
+        minProfitLamports: new BN(8_000),
       })
       .accounts(accounts)
       .remainingAccounts([
@@ -535,9 +532,8 @@ describe("local-validator SBF CPI integration", function () {
       .amount;
     const route = await program.methods
       .executeMeteoraToPump({
-        meteoraWsolIn: new BN(1_000),
-        meteoraMinTargetOut: new BN(1_900),
-        pumpMinWsolOut: new BN(3_900),
+        wsolAmountIn: new BN(1_000),
+        minProfitLamports: new BN(3_000),
       })
       .accounts(accounts)
       .remainingAccounts([

@@ -37,7 +37,7 @@ flowchart LR
 | `instructions/mod.rs` | 定义共享的 `ExecuteRoute` 账户集合，并构造各协议需要的账户视图。 |
 | `instructions/pump_to_meteora.rs` | `execute_pump_to_meteora` 的链上执行编排。 |
 | `instructions/meteora_to_pump.rs` | `execute_meteora_to_pump` 的链上执行编排。 |
-| `instructions/post_trade_checks.rs` | 统一的执行后状态检查扩展点。 |
+| `instructions/post_trade_checks.rs` | 校验动态执行参数，计算第二腿最低回收量，并检查最终利润和目标币余额。 |
 | `adapters/pump_swap.rs` | PumpSwap Pool 验证、指令编码和 CPI 封装。 |
 | `adapters/meteora_dlmm.rs` | Meteora LB Pair、Bitmap、Bin Array 验证及 CPI 封装。 |
 | `utils/account_validation.rs` | 解析外部协议账户的稳定字段前缀，校验 mint、vault/reserve、owner、discriminator 和池归属。 |
@@ -67,6 +67,29 @@ flowchart LR
   non-signer、由官方 DLMM Program 拥有，并且内嵌 `lb_pair` 必须匹配本次路线。
 - 外部协议仍会校验其 global config、oracle、event authority、fee recipient 等协议专属
   PDA；本 Program 在 CPI 前补充与路线强相关的结构和归属校验。
+
+### 动态执行参数与利润条件
+
+两个方向的指令都接收相同的动态参数，客户端可逐笔设置：
+
+| 参数 | 类型 | 含义 |
+| --- | --- | --- |
+| `wsol_amount_in` | `u64` | 第一腿固定投入的 WSOL 数量，单位为 lamports。 |
+| `min_profit_lamports` | `u64` | 第二腿完成后要求的最小 WSOL 毛利润，单位为 lamports。 |
+
+Program 在第一腿前记录用户 WSOL 和目标币余额，第一腿只投入
+`wsol_amount_in`，随后以实际收到的目标币增量作为第二腿输入。第二腿要求的最低 WSOL
+输出由链上余额动态计算：
+
+```text
+required_final_wsol = initial_wsol + min_profit_lamports
+required_second_leg_out = max(required_final_wsol - wsol_before_second_leg, 1)
+```
+
+第二腿 CPI 完成后还会再次检查 `final_wsol >= required_final_wsol`，并要求目标币余额恢复到
+交易前数值。任何条件不满足都会返回错误，第一腿和第二腿的全部状态变化随交易原子回滚。
+这里计算的是 WSOL 账户内的交易毛利润，不包含交易基础费、优先费或其他由 fee payer
+支付的链外余额成本。
 
 ### 扩展原则
 

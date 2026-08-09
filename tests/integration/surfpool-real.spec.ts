@@ -268,9 +268,8 @@ describe("Surfpool real-protocol CPI compatibility", function () {
 
     const route = await program.methods
       .executePumpToMeteora({
-        pumpSpendableWsolIn: new BN(spendableWsol),
-        pumpMinTargetOut: new BN(1),
-        meteoraMinWsolOut: new BN(1),
+        wsolAmountIn: new BN(spendableWsol),
+        minProfitLamports: new BN(process.env.SURFPOOL_MIN_PROFIT ?? "1"),
       })
       .accounts(routeAccounts)
       .remainingAccounts(
@@ -442,9 +441,8 @@ describe("Surfpool real-protocol CPI compatibility", function () {
 
     const route = await program.methods
       .executeMeteoraToPump({
-        meteoraWsolIn: new BN(wsolInput),
-        meteoraMinTargetOut: new BN(1),
-        pumpMinWsolOut: new BN(1),
+        wsolAmountIn: new BN(wsolInput),
+        minProfitLamports: new BN(process.env.SURFPOOL_MIN_PROFIT ?? "1"),
       })
       .accounts(routeAccounts)
       .remainingAccounts(

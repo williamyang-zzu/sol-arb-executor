@@ -18,6 +18,12 @@ pub enum ArbError {
     BalanceDidNotIncreaseAsExpected,
     #[msg("Checked integer arithmetic failed")]
     ArithmeticOverflow,
+    #[msg("The input amount and minimum profit must both be greater than zero")]
+    InvalidAmount,
+    #[msg("The route did not produce the required minimum WSOL profit")]
+    ProfitTooLow,
+    #[msg("The route did not restore the target-token balance")]
+    TargetBalanceNotRestored,
     #[msg("The token program is unsupported or does not own the supplied mint/account")]
     UnsupportedTokenProgram,
     #[msg("The Token-2022 mint contains an unsupported extension")]

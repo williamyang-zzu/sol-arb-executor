@@ -56,6 +56,7 @@ const METEORA_POOL = new PublicKey(
   process.env.METEORA_POOL ?? "GsKmn6qcL13MctorxXfKeUsVLz2c91uPFWMPXPU4Whni",
 );
 const INPUT_LAMPORTS = new BN(process.env.INPUT_LAMPORTS ?? "5000000");
+const MIN_PROFIT_LAMPORTS = new BN(process.env.MIN_PROFIT_LAMPORTS ?? "10000");
 const SLIPPAGE_PERCENT = 5;
 const METEORA_SLIPPAGE_BPS = new BN(SLIPPAGE_PERCENT * 100);
 const DESIRED_WSOL_BALANCE = 12_000_000n;
@@ -344,9 +345,8 @@ async function main(): Promise<void> {
       );
       const instruction = await program.methods
         .executePumpToMeteora({
-          pumpSpendableWsolIn: INPUT_LAMPORTS,
-          pumpMinTargetOut: pumpQuote.base.muln(95).divn(100),
-          meteoraMinWsolOut: meteoraQuote.minOutAmount,
+          wsolAmountIn: INPUT_LAMPORTS,
+          minProfitLamports: MIN_PROFIT_LAMPORTS,
         })
         .accounts(routeAccounts)
         .remainingAccounts(
@@ -390,9 +390,8 @@ async function main(): Promise<void> {
     });
     const instruction = await program.methods
       .executeMeteoraToPump({
-        meteoraWsolIn: INPUT_LAMPORTS,
-        meteoraMinTargetOut: meteoraQuote.minOutAmount,
-        pumpMinWsolOut: pumpQuote.minQuote,
+        wsolAmountIn: INPUT_LAMPORTS,
+        minProfitLamports: MIN_PROFIT_LAMPORTS,
       })
       .accounts(routeAccounts)
       .remainingAccounts(

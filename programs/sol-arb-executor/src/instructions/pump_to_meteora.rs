@@ -9,15 +9,15 @@ use crate::{
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, Eq, PartialEq)]
 pub struct PumpToMeteoraArgs {
-    pub pump_spendable_wsol_in: u64,
-    pub pump_min_target_out: u64,
-    pub meteora_min_wsol_out: u64,
+    pub wsol_amount_in: u64,
+    pub min_profit_lamports: u64,
 }
 
 pub fn handler<'info>(
     ctx: Context<'_, '_, 'info, 'info, ExecuteRoute<'info>>,
     args: PumpToMeteoraArgs,
 ) -> Result<()> {
+    post_trade_checks::validate_args(args.wsol_amount_in, args.min_profit_lamports)?;
     ctx.accounts.validate_route_mints()?;
     let initial_wsol = ctx.accounts.user_wsol.amount;
     let initial_target = ctx.accounts.user_target.amount;
@@ -28,11 +28,7 @@ pub fn handler<'info>(
         initial_wsol_balance: initial_wsol,
     });
 
-    pump_swap::buy_exact_quote_in(
-        &ctx.accounts.pump_accounts(),
-        args.pump_spendable_wsol_in,
-        args.pump_min_target_out,
-    )?;
+    pump_swap::buy_exact_quote_in(&ctx.accounts.pump_accounts(), args.wsol_amount_in, 1)?;
     ctx.accounts.user_target.reload()?;
     let actual_target_delta = checked_increase(initial_target, ctx.accounts.user_target.amount)?;
     emit!(FirstLegCompleted {
@@ -42,6 +38,11 @@ pub fn handler<'info>(
 
     ctx.accounts.user_wsol.reload()?;
     let wsol_before_second_leg = ctx.accounts.user_wsol.amount;
+    let required_second_leg_out = post_trade_checks::required_second_leg_out(
+        initial_wsol,
+        wsol_before_second_leg,
+        args.min_profit_lamports,
+    )?;
     let meteora_accounts = ctx.accounts.meteora_accounts(
         ctx.accounts.user_target.to_account_info(),
         ctx.accounts.user_wsol.to_account_info(),
@@ -50,7 +51,7 @@ pub fn handler<'info>(
         &meteora_accounts,
         ctx.remaining_accounts,
         actual_target_delta,
-        args.meteora_min_wsol_out,
+        required_second_leg_out,
     )?;
     ctx.accounts.user_wsol.reload()?;
     let second_leg_wsol_delta =
@@ -61,7 +62,14 @@ pub fn handler<'info>(
     });
 
     let final_wsol = ctx.accounts.user_wsol.amount;
-    post_trade_checks::observe(initial_wsol, final_wsol)?;
+    ctx.accounts.user_target.reload()?;
+    post_trade_checks::enforce(
+        initial_wsol,
+        final_wsol,
+        args.min_profit_lamports,
+        initial_target,
+        ctx.accounts.user_target.amount,
+    )?;
     emit!(RouteCompleted {
         direction: RouteDirection::PumpToMeteora,
         trader: ctx.accounts.trader.key(),
