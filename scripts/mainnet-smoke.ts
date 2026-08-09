@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { AnchorProvider, BN, Idl, Program, Wallet } from "@coral-xyz/anchor";
 import {
@@ -60,6 +61,10 @@ const MIN_PROFIT_LAMPORTS = new BN(process.env.MIN_PROFIT_LAMPORTS ?? "10000");
 const SLIPPAGE_PERCENT = 5;
 const METEORA_SLIPPAGE_BPS = new BN(SLIPPAGE_PERCENT * 100);
 const DESIRED_WSOL_BALANCE = 12_000_000n;
+const BATCH_ATTEMPTS = Number(process.env.BATCH_ATTEMPTS ?? "0");
+const BATCH_INTERVAL_MS = Number(process.env.BATCH_INTERVAL_MS ?? "3000");
+const BATCH_DIRECTION = process.env.BATCH_DIRECTION ?? "pump-to-meteora";
+const BATCH_WAIT_FOR_LANDING = process.env.BATCH_WAIT_FOR_LANDING === "true";
 
 type Direction = "pump-to-meteora" | "meteora-to-pump";
 
@@ -316,6 +321,7 @@ async function main(): Promise<void> {
     bins: PublicKey[];
     quote: Record<string, string>;
   }> {
+    await dlmm.refetchStates();
     const pumpState = await pumpOnline.swapSolanaState(
       PUMP_POOL,
       signer.publicKey,
@@ -413,8 +419,19 @@ async function main(): Promise<void> {
     };
   }
 
+  if (!Number.isSafeInteger(BATCH_ATTEMPTS) || BATCH_ATTEMPTS < 0) {
+    throw new Error("BATCH_ATTEMPTS must be a non-negative safe integer");
+  }
+  if (BATCH_INTERVAL_MS < 3_000) {
+    throw new Error("BATCH_INTERVAL_MS must be at least 3000");
+  }
+  if (BATCH_DIRECTION !== "pump-to-meteora") {
+    throw new Error("Batch mode currently permits only pump-to-meteora");
+  }
+
   const initialForward = await build("pump-to-meteora");
-  const initialReverse = await build("meteora-to-pump");
+  const initialReverse =
+    BATCH_ATTEMPTS === 0 ? await build("meteora-to-pump") : null;
   let table: AddressLookupTableAccount;
   let altSignatures: string[] = [];
   if (process.env.ADDRESS_LOOKUP_TABLE) {
@@ -433,7 +450,7 @@ async function main(): Promise<void> {
       EXECUTOR,
       ...Object.values(routeAccounts),
       ...initialForward.bins,
-      ...initialReverse.bins,
+      ...(initialReverse?.bins ?? []),
     ]);
     table = created.table;
     altSignatures = created.signatures;
@@ -456,9 +473,99 @@ async function main(): Promise<void> {
     return { transaction, latest };
   }
 
+  if (BATCH_ATTEMPTS > 0) {
+    if (process.env.SEND_REAL_TRANSACTION !== "true") {
+      throw new Error("Batch mode requires SEND_REAL_TRANSACTION=true");
+    }
+    const signatures: string[] = [];
+    let sendErrors = 0;
+    while (signatures.length < BATCH_ATTEMPTS) {
+      const startedAt = Date.now();
+      try {
+        const built = await build("pump-to-meteora");
+        const { transaction, latest } = await transactionFor(built.instruction);
+        const serialized = transaction.serialize();
+        const signature = await connection.sendRawTransaction(serialized, {
+          skipPreflight: true,
+          maxRetries: 5,
+        });
+        if (BATCH_WAIT_FOR_LANDING) {
+          let landed = false;
+          let polls = 0;
+          while (!landed) {
+            await new Promise((resolve) => setTimeout(resolve, 1_000));
+            const status = (
+              await connection.getSignatureStatuses([signature], {
+                searchTransactionHistory: true,
+              })
+            ).value[0];
+            if (status) {
+              landed = true;
+              break;
+            }
+            polls += 1;
+            if (polls % 3 === 0) {
+              await connection.sendRawTransaction(serialized, {
+                skipPreflight: true,
+                maxRetries: 5,
+              });
+            }
+            if (
+              (await connection.getBlockHeight("confirmed")) >
+              latest.lastValidBlockHeight
+            ) {
+              throw new Error(`Signature ${signature} expired before landing`);
+            }
+          }
+        }
+        signatures.push(signature);
+        const ordinal = signatures.length;
+        console.log("Batch transaction", {
+          ordinal,
+          signature,
+          status: BATCH_WAIT_FOR_LANDING ? "landed" : "broadcast",
+          lastValidBlockHeight: latest.lastValidBlockHeight,
+        });
+      } catch (error) {
+        sendErrors += 1;
+        console.error("Batch send error", {
+          accepted: signatures.length,
+          sendErrors,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      const remainingDelay = BATCH_INTERVAL_MS - (Date.now() - startedAt);
+      if (remainingDelay > 0 && signatures.length < BATCH_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 15_000));
+    const statuses = [];
+    for (let index = 0; index < signatures.length; index += 256) {
+      const response = await connection.getSignatureStatuses(
+        signatures.slice(index, index + 256),
+        { searchTransactionHistory: true },
+      );
+      statuses.push(...response.value);
+    }
+    const landed = statuses.filter((status) => status !== null);
+    const succeeded = landed.filter((status) => status!.err === null).length;
+    const reverted = landed.filter((status) => status!.err !== null).length;
+    console.log("Batch complete", {
+      attempted: signatures.length,
+      landed: landed.length,
+      succeeded,
+      reverted,
+      missing: signatures.length - landed.length,
+      sendErrors,
+      signatures,
+    });
+    return;
+  }
+
   for (const direction of ["pump-to-meteora", "meteora-to-pump"] as const) {
     const built =
-      direction === "pump-to-meteora" ? initialForward : initialReverse;
+      direction === "pump-to-meteora" ? initialForward : initialReverse!;
     const { transaction } = await transactionFor(built.instruction);
     const result = await connection.simulateTransaction(transaction, {
       commitment: "confirmed",
