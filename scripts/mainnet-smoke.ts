@@ -60,14 +60,14 @@ const MIN_PROFIT_LAMPORTS = new BN(process.env.MIN_PROFIT_LAMPORTS ?? "10000");
 const SLIPPAGE_PERCENT = 5;
 const METEORA_SLIPPAGE_BPS = new BN(SLIPPAGE_PERCENT * 100);
 const DESIRED_WSOL_BALANCE = 12_000_000n;
-const BATCH_ATTEMPTS = Number(process.env.BATCH_ATTEMPTS ?? "0");
-const BATCH_INTERVAL_MS = Number(process.env.BATCH_INTERVAL_MS ?? "3000");
-const BATCH_DIRECTION = process.env.BATCH_DIRECTION ?? "pump-to-meteora";
-const BATCH_STATUS_POLL_MS = Number(process.env.BATCH_STATUS_POLL_MS ?? "1000");
+const TRANSACTION_COUNT = Number(process.env.TRANSACTION_COUNT ?? "0");
+const TRANSACTION_INTERVAL_MS = Number(
+  process.env.TRANSACTION_INTERVAL_MS ?? "3000",
+);
+const TRANSACTION_DIRECTION =
+  process.env.TRANSACTION_DIRECTION ?? "pump-to-meteora";
 
 type Direction = "pump-to-meteora" | "meteora-to-pump";
-
-type BatchStatus = "broadcast" | "success" | "reverted" | "expired";
 
 type BatchRecord = {
   ordinal: number;
@@ -76,57 +76,13 @@ type BatchRecord = {
   broadcastAt: string;
   broadcastTimestampMs: number;
   lastValidBlockHeight: number;
-  status: BatchStatus;
-  landedSlot: number | null;
-  transactionPosition: number | null;
-  confirmationStatus: string | null;
-  confirmedAt: string | null;
-  errorType: string | null;
-  error: unknown;
-  computeUnitsConsumed: number | null;
-  feeLamports: number | null;
+  status: "broadcast";
 };
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) =>
     setTimeout(resolvePromise, milliseconds),
   );
-}
-
-function errorTypeFromLogs(logs: string[], error: unknown): string | null {
-  const anchorError = logs.find((line) => line.includes("Error Code:"));
-  const anchorCode = anchorError?.match(/Error Code: ([^.]+)\./)?.[1];
-  if (anchorCode) return anchorCode;
-  const failedProgram = logs.find((line) => line.includes(" failed:"));
-  if (failedProgram) return failedProgram;
-  return error ? JSON.stringify(error) : null;
-}
-
-async function blockSignatures(
-  connection: Connection,
-  slot: number,
-): Promise<string[]> {
-  const rpc = connection as unknown as {
-    _rpcRequest: (
-      method: string,
-      args: unknown[],
-    ) => Promise<{ result?: { signatures?: string[] }; error?: unknown }>;
-  };
-  const response = await rpc._rpcRequest("getBlock", [
-    slot,
-    {
-      commitment: "confirmed",
-      transactionDetails: "signatures",
-      rewards: false,
-      maxSupportedTransactionVersion: 0,
-    },
-  ]);
-  if (response.error) {
-    throw new Error(
-      `getBlock(${slot}) failed: ${JSON.stringify(response.error)}`,
-    );
-  }
-  return response.result?.signatures ?? [];
 }
 
 function required(name: string): string {
@@ -480,23 +436,29 @@ async function main(): Promise<void> {
     };
   }
 
-  if (!Number.isSafeInteger(BATCH_ATTEMPTS) || BATCH_ATTEMPTS < 0) {
-    throw new Error("BATCH_ATTEMPTS must be a non-negative safe integer");
+  if (!Number.isSafeInteger(TRANSACTION_COUNT) || TRANSACTION_COUNT < 0) {
+    throw new Error("TRANSACTION_COUNT must be a non-negative safe integer");
   }
-  if (BATCH_INTERVAL_MS < 3_000) {
-    throw new Error("BATCH_INTERVAL_MS must be at least 3000");
+  if (TRANSACTION_INTERVAL_MS < 1_000) {
+    throw new Error("TRANSACTION_INTERVAL_MS must be at least 1000");
   }
   if (
-    BATCH_DIRECTION !== "pump-to-meteora" &&
-    BATCH_DIRECTION !== "meteora-to-pump"
+    TRANSACTION_DIRECTION !== "pump-to-meteora" &&
+    TRANSACTION_DIRECTION !== "meteora-to-pump" &&
+    TRANSACTION_DIRECTION !== "alternate"
   ) {
-    throw new Error("BATCH_DIRECTION is invalid");
+    throw new Error("TRANSACTION_DIRECTION is invalid");
   }
-  const batchDirection = BATCH_DIRECTION as Direction;
+  const directionFor = (ordinal: number): Direction => {
+    if (TRANSACTION_DIRECTION === "alternate") {
+      return ordinal % 2 === 1 ? "pump-to-meteora" : "meteora-to-pump";
+    }
+    return TRANSACTION_DIRECTION as Direction;
+  };
 
   const initialForward = await build("pump-to-meteora");
   const initialReverse =
-    BATCH_ATTEMPTS === 0 || batchDirection === "meteora-to-pump"
+    TRANSACTION_COUNT === 0 || TRANSACTION_DIRECTION !== "pump-to-meteora"
       ? await build("meteora-to-pump")
       : null;
   let table: AddressLookupTableAccount;
@@ -540,19 +502,20 @@ async function main(): Promise<void> {
     return { transaction, latest };
   }
 
-  if (BATCH_ATTEMPTS > 0) {
+  if (TRANSACTION_COUNT > 0) {
     if (process.env.SEND_REAL_TRANSACTION !== "true") {
-      throw new Error("Batch mode requires SEND_REAL_TRANSACTION=true");
+      throw new Error(
+        "Repeated sender mode requires SEND_REAL_TRANSACTION=true",
+      );
     }
     const reportPath = resolve(
-      process.env.BATCH_REPORT_FILE ??
-        `target/mainnet-smoke-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+      process.env.BROADCAST_MANIFEST_FILE ??
+        `target/mainnet-smoke-broadcasts-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
     );
     mkdirSync(dirname(reportPath), { recursive: true });
     const records: BatchRecord[] = [];
     let sendErrors = 0;
     let sendingComplete = false;
-    const blockPositions = new Map<number, Map<string, number>>();
     const persist = () => {
       writeFileSync(
         reportPath,
@@ -564,12 +527,13 @@ async function main(): Promise<void> {
             targetMint: TARGET_MINT.toBase58(),
             pumpPool: PUMP_POOL.toBase58(),
             meteoraPool: METEORA_POOL.toBase58(),
-            direction: batchDirection,
-            requestedBroadcasts: BATCH_ATTEMPTS,
-            intervalMs: BATCH_INTERVAL_MS,
+            direction: TRANSACTION_DIRECTION,
+            requestedBroadcasts: TRANSACTION_COUNT,
+            intervalMs: TRANSACTION_INTERVAL_MS,
             wsolAmountIn: WSOL_AMOUNT_IN.toString(),
             minProfitLamports: MIN_PROFIT_LAMPORTS.toString(),
             sendErrors,
+            sendingComplete,
             records,
           },
           null,
@@ -578,99 +542,14 @@ async function main(): Promise<void> {
       );
     };
 
-    const monitor = async () => {
-      while (
-        !sendingComplete ||
-        records.some((record) => record.status === "broadcast")
-      ) {
-        const pending = records.filter(
-          (record) => record.status === "broadcast",
-        );
-        if (pending.length === 0) {
-          await sleep(BATCH_STATUS_POLL_MS);
-          continue;
-        }
-        try {
-          const currentBlockHeight =
-            await connection.getBlockHeight("confirmed");
-          for (let offset = 0; offset < pending.length; offset += 256) {
-            const group = pending.slice(offset, offset + 256);
-            const response = await connection.getSignatureStatuses(
-              group.map((record) => record.signature),
-              { searchTransactionHistory: true },
-            );
-            for (let index = 0; index < group.length; index += 1) {
-              const record = group[index];
-              const status = response.value[index];
-              if (!status) {
-                if (currentBlockHeight > record.lastValidBlockHeight) {
-                  record.status = "expired";
-                  record.errorType = "BlockhashExpiredWithoutLanding";
-                  record.confirmedAt = new Date().toISOString();
-                  persist();
-                }
-                continue;
-              }
-              const transaction = await connection.getTransaction(
-                record.signature,
-                {
-                  commitment: "confirmed",
-                  maxSupportedTransactionVersion: 0,
-                },
-              );
-              if (!transaction) continue;
-              let positions = blockPositions.get(status.slot);
-              if (!positions) {
-                positions = new Map(
-                  (await blockSignatures(connection, status.slot)).map(
-                    (signature, position) => [signature, position + 1],
-                  ),
-                );
-                blockPositions.set(status.slot, positions);
-              }
-              const logs = transaction.meta?.logMessages ?? [];
-              record.status = status.err === null ? "success" : "reverted";
-              record.landedSlot = status.slot;
-              record.transactionPosition =
-                positions.get(record.signature) ?? null;
-              record.confirmationStatus = status.confirmationStatus ?? null;
-              record.confirmedAt = new Date().toISOString();
-              record.error = status.err;
-              record.errorType = errorTypeFromLogs(logs, status.err);
-              record.computeUnitsConsumed = Number(
-                transaction.meta?.computeUnitsConsumed ?? 0,
-              );
-              record.feeLamports = transaction.meta?.fee ?? null;
-              persist();
-              console.log("Batch status", {
-                ordinal: record.ordinal,
-                signature: record.signature,
-                status: record.status,
-                slot: record.landedSlot,
-                transactionPosition: record.transactionPosition,
-                errorType: record.errorType,
-                computeUnitsConsumed: record.computeUnitsConsumed,
-                feeLamports: record.feeLamports,
-              });
-            }
-          }
-        } catch (error) {
-          console.error("Batch monitor error", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-        await sleep(BATCH_STATUS_POLL_MS);
-      }
-    };
-
-    const monitorPromise = monitor();
     let nextBroadcastNotBefore = Date.now();
-    for (let ordinal = 1; ordinal <= BATCH_ATTEMPTS; ordinal += 1) {
+    for (let ordinal = 1; ordinal <= TRANSACTION_COUNT; ordinal += 1) {
       await sleep(Math.max(0, nextBroadcastNotBefore - Date.now()));
       let accepted = false;
       while (!accepted) {
         try {
-          const built = await build(batchDirection);
+          const direction = directionFor(ordinal);
+          const built = await build(direction);
           const { transaction, latest } = await transactionFor(
             built.instruction,
           );
@@ -681,29 +560,23 @@ async function main(): Promise<void> {
           );
           records.push({
             ordinal,
-            direction: batchDirection,
+            direction,
             signature,
             broadcastAt: new Date(broadcastTimestampMs).toISOString(),
             broadcastTimestampMs,
             lastValidBlockHeight: latest.lastValidBlockHeight,
             status: "broadcast",
-            landedSlot: null,
-            transactionPosition: null,
-            confirmationStatus: null,
-            confirmedAt: null,
-            errorType: null,
-            error: null,
-            computeUnitsConsumed: null,
-            feeLamports: null,
           });
           persist();
           console.log("Batch broadcast", {
             ordinal,
+            direction,
             signature,
             broadcastAt: new Date(broadcastTimestampMs).toISOString(),
             lastValidBlockHeight: latest.lastValidBlockHeight,
           });
-          nextBroadcastNotBefore = broadcastTimestampMs + BATCH_INTERVAL_MS;
+          nextBroadcastNotBefore =
+            broadcastTimestampMs + TRANSACTION_INTERVAL_MS;
           accepted = true;
         } catch (error) {
           sendErrors += 1;
@@ -713,30 +586,16 @@ async function main(): Promise<void> {
             sendErrors,
             error: error instanceof Error ? error.message : String(error),
           });
-          await sleep(BATCH_INTERVAL_MS);
+          await sleep(TRANSACTION_INTERVAL_MS);
         }
       }
     }
     sendingComplete = true;
-    await monitorPromise;
     persist();
-    const succeeded = records.filter(
-      (record) => record.status === "success",
-    ).length;
-    const reverted = records.filter(
-      (record) => record.status === "reverted",
-    ).length;
-    const expired = records.filter(
-      (record) => record.status === "expired",
-    ).length;
-    console.log("Batch complete", {
+    console.log("Broadcasting complete", {
       broadcast: records.length,
-      landed: succeeded + reverted,
-      succeeded,
-      reverted,
-      expired,
       sendErrors,
-      reportPath,
+      manifestPath: reportPath,
     });
     return;
   }
