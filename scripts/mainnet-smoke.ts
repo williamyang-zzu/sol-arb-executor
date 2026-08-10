@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { AnchorProvider, BN, Idl, Program, Wallet } from "@coral-xyz/anchor";
 import {
@@ -16,7 +16,6 @@ import {
   OnlinePumpAmmSdk,
   buyQuoteInput,
   poolV2Pda,
-  sellBaseInput,
 } from "@pump-fun/pump-swap-sdk";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -57,8 +56,6 @@ const METEORA_POOL = new PublicKey(
 );
 const WSOL_AMOUNT_IN = new BN(required("WSOL_AMOUNT_IN"));
 const MIN_PROFIT_LAMPORTS = new BN(process.env.MIN_PROFIT_LAMPORTS ?? "10000");
-const SLIPPAGE_PERCENT = 5;
-const METEORA_SLIPPAGE_BPS = new BN(SLIPPAGE_PERCENT * 100);
 const DESIRED_WSOL_BALANCE = 12_000_000n;
 const TRANSACTION_COUNT = Number(process.env.TRANSACTION_COUNT ?? "0");
 const TRANSACTION_INTERVAL_MS = Number(
@@ -339,16 +336,16 @@ async function main(): Promise<void> {
     quote: Record<string, string>;
   }> {
     await dlmm.refetchStates();
-    const pumpState = await pumpOnline.swapSolanaState(
-      PUMP_POOL,
-      signer.publicKey,
-      userTarget,
-      userWsol,
-    );
     if (direction === "pump-to-meteora") {
+      const pumpState = await pumpOnline.swapSolanaState(
+        PUMP_POOL,
+        signer.publicKey,
+        userTarget,
+        userWsol,
+      );
       const pumpQuote = buyQuoteInput({
         quote: WSOL_AMOUNT_IN,
-        slippage: SLIPPAGE_PERCENT,
+        slippage: 0,
         baseReserve: pumpState.poolBaseAmount,
         quoteReserve: pumpState.poolQuoteAmount,
         virtualQuoteReserves: pumpState.pool.virtualQuoteReserves,
@@ -363,7 +360,7 @@ async function main(): Promise<void> {
       const meteoraQuote = dlmm.swapQuote(
         pumpQuote.base,
         true,
-        METEORA_SLIPPAGE_BPS,
+        new BN(0),
         arrays,
       );
       const instruction = await program.methods
@@ -386,7 +383,6 @@ async function main(): Promise<void> {
         quote: {
           pumpTargetOut: pumpQuote.base.toString(),
           finalWsolOut: meteoraQuote.outAmount.toString(),
-          minFinalWsolOut: meteoraQuote.minOutAmount.toString(),
         },
       };
     }
@@ -395,22 +391,9 @@ async function main(): Promise<void> {
     const meteoraQuote = dlmm.swapQuote(
       WSOL_AMOUNT_IN,
       false,
-      METEORA_SLIPPAGE_BPS,
+      new BN(0),
       arrays,
     );
-    const pumpQuote = sellBaseInput({
-      base: meteoraQuote.outAmount,
-      slippage: SLIPPAGE_PERCENT,
-      baseReserve: pumpState.poolBaseAmount,
-      quoteReserve: pumpState.poolQuoteAmount,
-      virtualQuoteReserves: pumpState.pool.virtualQuoteReserves,
-      globalConfig: pumpState.globalConfig,
-      feeConfig: pumpState.feeConfig,
-      baseMintAccount: pumpState.baseMintAccount,
-      baseMint: pumpState.baseMint,
-      coinCreator: pumpState.pool.coinCreator,
-      creator: pumpState.pool.creator,
-    });
     const instruction = await program.methods
       .executeMeteoraToPump({
         wsolAmountIn: WSOL_AMOUNT_IN,
@@ -430,8 +413,6 @@ async function main(): Promise<void> {
       bins: meteoraQuote.binArraysPubkey,
       quote: {
         meteoraTargetOut: meteoraQuote.outAmount.toString(),
-        finalWsolOut: pumpQuote.uiQuote.toString(),
-        minFinalWsolOut: pumpQuote.minQuote.toString(),
       },
     };
   }
@@ -513,7 +494,25 @@ async function main(): Promise<void> {
         `target/mainnet-smoke-broadcasts-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
     );
     mkdirSync(dirname(reportPath), { recursive: true });
-    const records: BatchRecord[] = [];
+    const existingManifest = existsSync(reportPath)
+      ? (JSON.parse(readFileSync(reportPath, "utf8")) as {
+          targetMint: string;
+          pumpPool: string;
+          meteoraPool: string;
+          requestedBroadcasts: number;
+          records: BatchRecord[];
+        })
+      : null;
+    if (
+      existingManifest &&
+      (existingManifest.targetMint !== TARGET_MINT.toBase58() ||
+        existingManifest.pumpPool !== PUMP_POOL.toBase58() ||
+        existingManifest.meteoraPool !== METEORA_POOL.toBase58() ||
+        existingManifest.requestedBroadcasts !== TRANSACTION_COUNT)
+    ) {
+      throw new Error("Existing broadcast manifest configuration mismatch");
+    }
+    const records: BatchRecord[] = existingManifest?.records ?? [];
     let sendErrors = 0;
     let sendingComplete = false;
     const persist = () => {
@@ -543,8 +542,11 @@ async function main(): Promise<void> {
     };
 
     let nextBroadcastNotBefore = Date.now();
-    for (let ordinal = 1; ordinal <= TRANSACTION_COUNT; ordinal += 1) {
-      await sleep(Math.max(0, nextBroadcastNotBefore - Date.now()));
+    for (
+      let ordinal = records.length + 1;
+      ordinal <= TRANSACTION_COUNT;
+      ordinal += 1
+    ) {
       let accepted = false;
       while (!accepted) {
         try {
@@ -553,6 +555,7 @@ async function main(): Promise<void> {
           const { transaction, latest } = await transactionFor(
             built.instruction,
           );
+          await sleep(Math.max(0, nextBroadcastNotBefore - Date.now()));
           const broadcastTimestampMs = Date.now();
           const signature = await connection.sendRawTransaction(
             transaction.serialize(),
