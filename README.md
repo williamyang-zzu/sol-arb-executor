@@ -109,6 +109,16 @@ CPI 能力。通用状态检查放入 `post_trade_checks`，避免将检查逻�
 See [docs/protocol-versions.md](docs/protocol-versions.md) for source links and
 compatibility decisions.
 
+## Mainnet validation milestone
+
+2026-08-10，部署在主网的执行器完成了首次真实盈利原子执行验证。同一轮受控测试中有
+两笔交易成功提交，扣除各自基础网络费后的净利润分别为 `105,127` 和 `66,914`
+lamports。
+
+交易签名、余额计算方式和验证边界见
+[docs/mainnet-milestones.md](docs/mainnet-milestones.md)。该记录仅证明对应版本和交易输入下的
+主网执行结果，不代表安全审计结论，也不公开客户端机会发现或交易选择策略。
+
 ## Setup and verification
 
 ```bash
