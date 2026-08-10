@@ -167,6 +167,35 @@ The scripts call `simulateTransaction` by default and print the account summary,
 return error, units consumed, and complete logs. They refuse to send unless
 `SEND_REAL_TRANSACTION=true` is explicitly set.
 
+### 固定间隔主网冒烟批次
+
+`scripts/mainnet-smoke.ts` 的批次模式将发送器与状态监控器分离。发送器不会等待上一笔交易
+确认：每次刷新池状态、获取新 blockhash、独立构建和签名一笔交易，并保证两次成功广播
+之间至少间隔 `BATCH_INTERVAL_MS`。监控器在后台按签名查询状态，不会阻塞发送循环。
+
+```bash
+BATCH_ATTEMPTS=200 \
+BATCH_INTERVAL_MS=3000 \
+BATCH_DIRECTION=pump-to-meteora \
+WSOL_AMOUNT_IN=10000000 \
+MIN_PROFIT_LAMPORTS=10000 \
+SEND_REAL_TRANSACTION=true \
+npm run smoke:mainnet
+```
+
+`BATCH_ATTEMPTS` 表示生成并广播的唯一签名数量，而不是保证落链的数量。全部签名广播完成后，
+监控器会继续运行，直到每笔交易成功、回滚或 blockhash 过期。默认报告写入
+`target/mainnet-smoke-<timestamp>.json`；可用 `BATCH_REPORT_FILE` 指定路径。每条记录包含：
+
+- 广播时间和签名；
+- 落链 slot 和该交易在区块中的位置（从 1 开始）；
+- `success`、`reverted` 或 `expired` 状态；
+- Anchor/协议错误类型及原始错误；
+- CU 消耗和手续费 lamports。
+
+RPC 对同一签名的内部重试不增加 `BATCH_ATTEMPTS`，也不会生成额外链上交易。发送失败且未
+获得签名时，脚本会按间隔重试当前序号。
+
 ## Security boundaries and current limitations
 
 - CPI targets are hard-coded to the official PumpSwap and Meteora program IDs.

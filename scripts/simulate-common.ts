@@ -69,7 +69,7 @@ export async function simulate(direction: Direction): Promise<void> {
   // accidental reuse of a route-accounts file for a different opportunity.
   const summary = {
     direction,
-    tokenMint: required("TOKEN_MINT"),
+    tokenMint: required("TARGET_MINT"),
     pumpPool: required("PUMP_POOL"),
     meteoraPool: required("METEORA_POOL"),
     userWsolAccount: required("USER_WSOL_ACCOUNT"),

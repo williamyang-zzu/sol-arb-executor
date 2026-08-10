@@ -1,5 +1,6 @@
 import "dotenv/config";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { AnchorProvider, BN, Idl, Program, Wallet } from "@coral-xyz/anchor";
 import {
   AMM_GLOBAL_VOLUME_ACCUMULATOR_PDA,
@@ -47,16 +48,14 @@ const EXECUTOR = new PublicKey("RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51");
 const METEORA_PROGRAM = new PublicKey(
   "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
 );
-const TARGET_MINT = new PublicKey(
-  process.env.TARGET_MINT ?? "EnA53NmMzfsAs7p44dATdvT55HHUACxpEbC9AKY3pump",
-);
+const TARGET_MINT = new PublicKey(required("TARGET_MINT"));
 const PUMP_POOL = new PublicKey(
   process.env.PUMP_POOL ?? "CkhpkGsmbVAV5hMrFJNri9PjcSMubSgiDFFaKMYBisy3",
 );
 const METEORA_POOL = new PublicKey(
   process.env.METEORA_POOL ?? "GsKmn6qcL13MctorxXfKeUsVLz2c91uPFWMPXPU4Whni",
 );
-const INPUT_LAMPORTS = new BN(process.env.INPUT_LAMPORTS ?? "5000000");
+const WSOL_AMOUNT_IN = new BN(required("WSOL_AMOUNT_IN"));
 const MIN_PROFIT_LAMPORTS = new BN(process.env.MIN_PROFIT_LAMPORTS ?? "10000");
 const SLIPPAGE_PERCENT = 5;
 const METEORA_SLIPPAGE_BPS = new BN(SLIPPAGE_PERCENT * 100);
@@ -64,9 +63,71 @@ const DESIRED_WSOL_BALANCE = 12_000_000n;
 const BATCH_ATTEMPTS = Number(process.env.BATCH_ATTEMPTS ?? "0");
 const BATCH_INTERVAL_MS = Number(process.env.BATCH_INTERVAL_MS ?? "3000");
 const BATCH_DIRECTION = process.env.BATCH_DIRECTION ?? "pump-to-meteora";
-const BATCH_WAIT_FOR_LANDING = process.env.BATCH_WAIT_FOR_LANDING === "true";
+const BATCH_STATUS_POLL_MS = Number(process.env.BATCH_STATUS_POLL_MS ?? "1000");
 
 type Direction = "pump-to-meteora" | "meteora-to-pump";
+
+type BatchStatus = "broadcast" | "success" | "reverted" | "expired";
+
+type BatchRecord = {
+  ordinal: number;
+  direction: Direction;
+  signature: string;
+  broadcastAt: string;
+  broadcastTimestampMs: number;
+  lastValidBlockHeight: number;
+  status: BatchStatus;
+  landedSlot: number | null;
+  transactionPosition: number | null;
+  confirmationStatus: string | null;
+  confirmedAt: string | null;
+  errorType: string | null;
+  error: unknown;
+  computeUnitsConsumed: number | null;
+  feeLamports: number | null;
+};
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolvePromise) =>
+    setTimeout(resolvePromise, milliseconds),
+  );
+}
+
+function errorTypeFromLogs(logs: string[], error: unknown): string | null {
+  const anchorError = logs.find((line) => line.includes("Error Code:"));
+  const anchorCode = anchorError?.match(/Error Code: ([^.]+)\./)?.[1];
+  if (anchorCode) return anchorCode;
+  const failedProgram = logs.find((line) => line.includes(" failed:"));
+  if (failedProgram) return failedProgram;
+  return error ? JSON.stringify(error) : null;
+}
+
+async function blockSignatures(
+  connection: Connection,
+  slot: number,
+): Promise<string[]> {
+  const rpc = connection as unknown as {
+    _rpcRequest: (
+      method: string,
+      args: unknown[],
+    ) => Promise<{ result?: { signatures?: string[] }; error?: unknown }>;
+  };
+  const response = await rpc._rpcRequest("getBlock", [
+    slot,
+    {
+      commitment: "confirmed",
+      transactionDetails: "signatures",
+      rewards: false,
+      maxSupportedTransactionVersion: 0,
+    },
+  ]);
+  if (response.error) {
+    throw new Error(
+      `getBlock(${slot}) failed: ${JSON.stringify(response.error)}`,
+    );
+  }
+  return response.result?.signatures ?? [];
+}
 
 function required(name: string): string {
   const value = process.env[name];
@@ -225,7 +286,7 @@ async function main(): Promise<void> {
     targetTokenProgram,
   );
   console.log("Trader", signer.publicKey.toBase58());
-  console.log("Input per direction", INPUT_LAMPORTS.toString(), "lamports");
+  console.log("Input per direction", WSOL_AMOUNT_IN.toString(), "lamports");
   const setupSignature = await prepareTokenAccounts(
     connection,
     signer,
@@ -330,7 +391,7 @@ async function main(): Promise<void> {
     );
     if (direction === "pump-to-meteora") {
       const pumpQuote = buyQuoteInput({
-        quote: INPUT_LAMPORTS,
+        quote: WSOL_AMOUNT_IN,
         slippage: SLIPPAGE_PERCENT,
         baseReserve: pumpState.poolBaseAmount,
         quoteReserve: pumpState.poolQuoteAmount,
@@ -351,7 +412,7 @@ async function main(): Promise<void> {
       );
       const instruction = await program.methods
         .executePumpToMeteora({
-          wsolAmountIn: INPUT_LAMPORTS,
+          wsolAmountIn: WSOL_AMOUNT_IN,
           minProfitLamports: MIN_PROFIT_LAMPORTS,
         })
         .accounts(routeAccounts)
@@ -376,7 +437,7 @@ async function main(): Promise<void> {
 
     const arrays = await dlmm.getBinArrayForSwap(false, 20);
     const meteoraQuote = dlmm.swapQuote(
-      INPUT_LAMPORTS,
+      WSOL_AMOUNT_IN,
       false,
       METEORA_SLIPPAGE_BPS,
       arrays,
@@ -396,7 +457,7 @@ async function main(): Promise<void> {
     });
     const instruction = await program.methods
       .executeMeteoraToPump({
-        wsolAmountIn: INPUT_LAMPORTS,
+        wsolAmountIn: WSOL_AMOUNT_IN,
         minProfitLamports: MIN_PROFIT_LAMPORTS,
       })
       .accounts(routeAccounts)
@@ -425,13 +486,19 @@ async function main(): Promise<void> {
   if (BATCH_INTERVAL_MS < 3_000) {
     throw new Error("BATCH_INTERVAL_MS must be at least 3000");
   }
-  if (BATCH_DIRECTION !== "pump-to-meteora") {
-    throw new Error("Batch mode currently permits only pump-to-meteora");
+  if (
+    BATCH_DIRECTION !== "pump-to-meteora" &&
+    BATCH_DIRECTION !== "meteora-to-pump"
+  ) {
+    throw new Error("BATCH_DIRECTION is invalid");
   }
+  const batchDirection = BATCH_DIRECTION as Direction;
 
   const initialForward = await build("pump-to-meteora");
   const initialReverse =
-    BATCH_ATTEMPTS === 0 ? await build("meteora-to-pump") : null;
+    BATCH_ATTEMPTS === 0 || batchDirection === "meteora-to-pump"
+      ? await build("meteora-to-pump")
+      : null;
   let table: AddressLookupTableAccount;
   let altSignatures: string[] = [];
   if (process.env.ADDRESS_LOOKUP_TABLE) {
@@ -477,88 +544,199 @@ async function main(): Promise<void> {
     if (process.env.SEND_REAL_TRANSACTION !== "true") {
       throw new Error("Batch mode requires SEND_REAL_TRANSACTION=true");
     }
-    const signatures: string[] = [];
+    const reportPath = resolve(
+      process.env.BATCH_REPORT_FILE ??
+        `target/mainnet-smoke-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+    );
+    mkdirSync(dirname(reportPath), { recursive: true });
+    const records: BatchRecord[] = [];
     let sendErrors = 0;
-    while (signatures.length < BATCH_ATTEMPTS) {
-      const startedAt = Date.now();
-      try {
-        const built = await build("pump-to-meteora");
-        const { transaction, latest } = await transactionFor(built.instruction);
-        const serialized = transaction.serialize();
-        const signature = await connection.sendRawTransaction(serialized, {
-          skipPreflight: true,
-          maxRetries: 5,
-        });
-        if (BATCH_WAIT_FOR_LANDING) {
-          let landed = false;
-          let polls = 0;
-          while (!landed) {
-            await new Promise((resolve) => setTimeout(resolve, 1_000));
-            const status = (
-              await connection.getSignatureStatuses([signature], {
-                searchTransactionHistory: true,
-              })
-            ).value[0];
-            if (status) {
-              landed = true;
-              break;
-            }
-            polls += 1;
-            if (polls % 3 === 0) {
-              await connection.sendRawTransaction(serialized, {
-                skipPreflight: true,
-                maxRetries: 5,
+    let sendingComplete = false;
+    const blockPositions = new Map<number, Map<string, number>>();
+    const persist = () => {
+      writeFileSync(
+        reportPath,
+        `${JSON.stringify(
+          {
+            generatedAt: new Date().toISOString(),
+            programId: EXECUTOR.toBase58(),
+            trader: signer.publicKey.toBase58(),
+            targetMint: TARGET_MINT.toBase58(),
+            pumpPool: PUMP_POOL.toBase58(),
+            meteoraPool: METEORA_POOL.toBase58(),
+            direction: batchDirection,
+            requestedBroadcasts: BATCH_ATTEMPTS,
+            intervalMs: BATCH_INTERVAL_MS,
+            wsolAmountIn: WSOL_AMOUNT_IN.toString(),
+            minProfitLamports: MIN_PROFIT_LAMPORTS.toString(),
+            sendErrors,
+            records,
+          },
+          null,
+          2,
+        )}\n`,
+      );
+    };
+
+    const monitor = async () => {
+      while (
+        !sendingComplete ||
+        records.some((record) => record.status === "broadcast")
+      ) {
+        const pending = records.filter(
+          (record) => record.status === "broadcast",
+        );
+        if (pending.length === 0) {
+          await sleep(BATCH_STATUS_POLL_MS);
+          continue;
+        }
+        try {
+          const currentBlockHeight =
+            await connection.getBlockHeight("confirmed");
+          for (let offset = 0; offset < pending.length; offset += 256) {
+            const group = pending.slice(offset, offset + 256);
+            const response = await connection.getSignatureStatuses(
+              group.map((record) => record.signature),
+              { searchTransactionHistory: true },
+            );
+            for (let index = 0; index < group.length; index += 1) {
+              const record = group[index];
+              const status = response.value[index];
+              if (!status) {
+                if (currentBlockHeight > record.lastValidBlockHeight) {
+                  record.status = "expired";
+                  record.errorType = "BlockhashExpiredWithoutLanding";
+                  record.confirmedAt = new Date().toISOString();
+                  persist();
+                }
+                continue;
+              }
+              const transaction = await connection.getTransaction(
+                record.signature,
+                {
+                  commitment: "confirmed",
+                  maxSupportedTransactionVersion: 0,
+                },
+              );
+              if (!transaction) continue;
+              let positions = blockPositions.get(status.slot);
+              if (!positions) {
+                positions = new Map(
+                  (await blockSignatures(connection, status.slot)).map(
+                    (signature, position) => [signature, position + 1],
+                  ),
+                );
+                blockPositions.set(status.slot, positions);
+              }
+              const logs = transaction.meta?.logMessages ?? [];
+              record.status = status.err === null ? "success" : "reverted";
+              record.landedSlot = status.slot;
+              record.transactionPosition =
+                positions.get(record.signature) ?? null;
+              record.confirmationStatus = status.confirmationStatus ?? null;
+              record.confirmedAt = new Date().toISOString();
+              record.error = status.err;
+              record.errorType = errorTypeFromLogs(logs, status.err);
+              record.computeUnitsConsumed = Number(
+                transaction.meta?.computeUnitsConsumed ?? 0,
+              );
+              record.feeLamports = transaction.meta?.fee ?? null;
+              persist();
+              console.log("Batch status", {
+                ordinal: record.ordinal,
+                signature: record.signature,
+                status: record.status,
+                slot: record.landedSlot,
+                transactionPosition: record.transactionPosition,
+                errorType: record.errorType,
+                computeUnitsConsumed: record.computeUnitsConsumed,
+                feeLamports: record.feeLamports,
               });
             }
-            if (
-              (await connection.getBlockHeight("confirmed")) >
-              latest.lastValidBlockHeight
-            ) {
-              throw new Error(`Signature ${signature} expired before landing`);
-            }
           }
+        } catch (error) {
+          console.error("Batch monitor error", {
+            error: error instanceof Error ? error.message : String(error),
+          });
         }
-        signatures.push(signature);
-        const ordinal = signatures.length;
-        console.log("Batch transaction", {
-          ordinal,
-          signature,
-          status: BATCH_WAIT_FOR_LANDING ? "landed" : "broadcast",
-          lastValidBlockHeight: latest.lastValidBlockHeight,
-        });
-      } catch (error) {
-        sendErrors += 1;
-        console.error("Batch send error", {
-          accepted: signatures.length,
-          sendErrors,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        await sleep(BATCH_STATUS_POLL_MS);
       }
-      const remainingDelay = BATCH_INTERVAL_MS - (Date.now() - startedAt);
-      if (remainingDelay > 0 && signatures.length < BATCH_ATTEMPTS) {
-        await new Promise((resolve) => setTimeout(resolve, remainingDelay));
+    };
+
+    const monitorPromise = monitor();
+    let nextBroadcastNotBefore = Date.now();
+    for (let ordinal = 1; ordinal <= BATCH_ATTEMPTS; ordinal += 1) {
+      await sleep(Math.max(0, nextBroadcastNotBefore - Date.now()));
+      let accepted = false;
+      while (!accepted) {
+        try {
+          const built = await build(batchDirection);
+          const { transaction, latest } = await transactionFor(
+            built.instruction,
+          );
+          const broadcastTimestampMs = Date.now();
+          const signature = await connection.sendRawTransaction(
+            transaction.serialize(),
+            { skipPreflight: true, maxRetries: 5 },
+          );
+          records.push({
+            ordinal,
+            direction: batchDirection,
+            signature,
+            broadcastAt: new Date(broadcastTimestampMs).toISOString(),
+            broadcastTimestampMs,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+            status: "broadcast",
+            landedSlot: null,
+            transactionPosition: null,
+            confirmationStatus: null,
+            confirmedAt: null,
+            errorType: null,
+            error: null,
+            computeUnitsConsumed: null,
+            feeLamports: null,
+          });
+          persist();
+          console.log("Batch broadcast", {
+            ordinal,
+            signature,
+            broadcastAt: new Date(broadcastTimestampMs).toISOString(),
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          });
+          nextBroadcastNotBefore = broadcastTimestampMs + BATCH_INTERVAL_MS;
+          accepted = true;
+        } catch (error) {
+          sendErrors += 1;
+          persist();
+          console.error("Batch send error", {
+            ordinal,
+            sendErrors,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          await sleep(BATCH_INTERVAL_MS);
+        }
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 15_000));
-    const statuses = [];
-    for (let index = 0; index < signatures.length; index += 256) {
-      const response = await connection.getSignatureStatuses(
-        signatures.slice(index, index + 256),
-        { searchTransactionHistory: true },
-      );
-      statuses.push(...response.value);
-    }
-    const landed = statuses.filter((status) => status !== null);
-    const succeeded = landed.filter((status) => status!.err === null).length;
-    const reverted = landed.filter((status) => status!.err !== null).length;
+    sendingComplete = true;
+    await monitorPromise;
+    persist();
+    const succeeded = records.filter(
+      (record) => record.status === "success",
+    ).length;
+    const reverted = records.filter(
+      (record) => record.status === "reverted",
+    ).length;
+    const expired = records.filter(
+      (record) => record.status === "expired",
+    ).length;
     console.log("Batch complete", {
-      attempted: signatures.length,
-      landed: landed.length,
+      broadcast: records.length,
+      landed: succeeded + reverted,
       succeeded,
       reverted,
-      missing: signatures.length - landed.length,
+      expired,
       sendErrors,
-      signatures,
+      reportPath,
     });
     return;
   }
