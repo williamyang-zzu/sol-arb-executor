@@ -1,0 +1,31 @@
+[package]
+name = "quote-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+solana-program = "=2.2.1"
+# Newer blake3 releases pull an Edition-2024 digest stack that Solana's
+# platform-tools Rust 1.84 cannot parse yet.
+blake3 = "=1.5.5"
+borsh = "=1.5.7"
+indexmap = "=2.12.0"
+proc-macro-crate = "=3.3.0"
+zeroize = "=1.8.1"
+
+[dev-dependencies]
+base64 = "=0.22.1"
+serde_json = "=1.0.145"
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = [
+    'cfg(target_os, values("solana"))',
+    'cfg(feature, values("custom-heap", "custom-panic"))',
+] }
+
+# Keep this feasibility probe isolated from the production Anchor workspace.
+[workspace]

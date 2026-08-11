@@ -106,4 +106,31 @@ describe("route instruction construction", () => {
 
     expect(ix.data.length).to.equal(8 + 8 * 2);
   });
+
+  it("constructs best-direction with the same minimal two-parameter interface", async () => {
+    const binArrays = [
+      Keypair.generate().publicKey,
+      Keypair.generate().publicKey,
+      Keypair.generate().publicKey,
+    ];
+    const ix = await program.methods
+      .executeBestDirection({
+        wsolAmountIn: new BN(5_000_000),
+        minProfitLamports: new BN(10_000),
+      })
+      .accounts(randomAccounts())
+      .remainingAccounts(
+        binArrays.map((pubkey) => ({
+          pubkey,
+          isSigner: false,
+          isWritable: true,
+        })),
+      )
+      .instruction();
+
+    expect(ix.data.length).to.equal(8 + 8 * 2);
+    expect(ix.keys.slice(-3).map((meta) => meta.pubkey.toBase58())).to.deep.equal(
+      binArrays.map((key) => key.toBase58()),
+    );
+  });
 });

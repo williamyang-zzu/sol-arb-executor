@@ -32,4 +32,8 @@ pub enum ArbError {
     InvalidRouteAccounts,
     #[msg("A foreign protocol account is shorter than its verified IDL layout")]
     InvalidAccountData,
+    #[msg("Both route directions could not be quoted completely")]
+    BestDirectionQuoteIncomplete,
+    #[msg("Neither route direction satisfies the required minimum profit")]
+    NoProfitableDirection,
 }

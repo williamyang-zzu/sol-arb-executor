@@ -7,9 +7,11 @@ pub mod constants;
 pub mod errors;
 pub mod events;
 pub mod instructions;
+pub mod quote;
 pub mod utils;
 
 pub(crate) use instructions::__client_accounts_execute_route;
+pub use instructions::best_direction::BestDirectionArgs;
 pub use instructions::meteora_to_pump::MeteoraToPumpArgs;
 pub use instructions::pump_to_meteora::PumpToMeteoraArgs;
 pub use instructions::ExecuteRoute;
@@ -32,5 +34,12 @@ pub mod sol_arb_executor {
         args: MeteoraToPumpArgs,
     ) -> Result<()> {
         instructions::meteora_to_pump::handler(ctx, args)
+    }
+
+    pub fn execute_best_direction<'info>(
+        ctx: Context<'_, '_, 'info, 'info, ExecuteRoute<'info>>,
+        args: BestDirectionArgs,
+    ) -> Result<()> {
+        instructions::best_direction::handler(ctx, args)
     }
 }

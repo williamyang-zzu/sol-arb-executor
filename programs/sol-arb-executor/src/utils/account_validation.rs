@@ -111,7 +111,7 @@ pub fn validate_bin_array_data(data: &[u8], expected_lb_pair: &Pubkey) -> Result
 
 pub fn validate_bin_arrays(accounts: &[AccountInfo<'_>], lb_pair: &Pubkey) -> Result<()> {
     validate_bin_array_count(accounts.len())?;
-    for account in accounts {
+    for (position, account) in accounts.iter().enumerate() {
         require_keys_eq!(
             *account.owner,
             METEORA_DLMM_PROGRAM_ID,
@@ -122,6 +122,24 @@ pub fn validate_bin_arrays(accounts: &[AccountInfo<'_>], lb_pair: &Pubkey) -> Re
             ArbError::InvalidBinArray
         );
         validate_bin_array_data(&account.try_borrow_data()?, lb_pair)?;
+        let data = account.try_borrow_data()?;
+        let index = i64::from_le_bytes(
+            data.get(8..16)
+                .ok_or(error!(ArbError::InvalidBinArray))?
+                .try_into()
+                .map_err(|_| error!(ArbError::InvalidBinArray))?,
+        );
+        for previous in &accounts[..position] {
+            let previous_data = previous.try_borrow_data()?;
+            let previous_index = i64::from_le_bytes(
+                previous_data
+                    .get(8..16)
+                    .ok_or(error!(ArbError::InvalidBinArray))?
+                    .try_into()
+                    .map_err(|_| error!(ArbError::InvalidBinArray))?,
+            );
+            require!(index != previous_index, ArbError::InvalidBinArray);
+        }
     }
     Ok(())
 }

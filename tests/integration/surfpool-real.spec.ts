@@ -156,6 +156,227 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     return mintAccount.owner;
   }
 
+  async function buildBestDirectionFixture() {
+    const pumpPoolAddress = new PublicKey(required("SURFPOOL_PUMP_POOL"));
+    const pumpGlobalAddress = new PublicKey(
+      required("SURFPOOL_PUMP_GLOBAL_CONFIG"),
+    );
+    const meteoraPoolAddress = new PublicKey(required("SURFPOOL_METEORA_POOL"));
+    const pumpProgram = getPumpAmmProgram(connection);
+    const pumpPool = await pumpProgram.account.pool.fetch(pumpPoolAddress);
+    const targetMint = process.env.SURFPOOL_TARGET_MINT
+      ? new PublicKey(process.env.SURFPOOL_TARGET_MINT)
+      : pumpPool.baseMint;
+    const targetTokenProgram = await tokenProgramForMint(targetMint);
+
+    surfnet.fundToken(
+      trader.publicKey.toBase58(),
+      NATIVE_MINT.toBase58(),
+      2_000_000_000,
+    );
+    surfnet.fundToken(
+      trader.publicKey.toBase58(),
+      targetMint.toBase58(),
+      1_000_000_000,
+      targetTokenProgram.toBase58(),
+    );
+    const userWsol = new PublicKey(
+      surfnet.getAta(trader.publicKey.toBase58(), NATIVE_MINT.toBase58()),
+    );
+    const userTarget = new PublicKey(
+      surfnet.getAta(
+        trader.publicKey.toBase58(),
+        targetMint.toBase58(),
+        targetTokenProgram.toBase58(),
+      ),
+    );
+    const pumpGlobal =
+      await pumpProgram.account.globalConfig.fetch(pumpGlobalAddress);
+    const protocolFeeRecipient = pumpGlobal.protocolFeeRecipients[0];
+    const buybackFeeRecipient = pumpGlobal.buybackFeeRecipients[0];
+    const coinCreatorVaultAuthority = ammCreatorVaultPda(pumpPool.coinCreator);
+    const pumpFeeConfig = PublicKey.findProgramAddressSync(
+      [Buffer.from("fee_config"), PUMP_AMM_PROGRAM_ID.toBuffer()],
+      PUMP_FEE_PROGRAM_ID,
+    )[0];
+    const dlmm = await DLMM.create(connection, meteoraPoolAddress);
+    const targetIsX = dlmm.lbPair.tokenXMint.equals(targetMint);
+    expect(
+      targetIsX
+        ? dlmm.lbPair.tokenYMint.equals(NATIVE_MINT)
+        : dlmm.lbPair.tokenXMint.equals(NATIVE_MINT),
+    ).to.equal(true);
+    const forwardArrays = await dlmm.getBinArrayForSwap(targetIsX, 2);
+    const reverseArrays = await dlmm.getBinArrayForSwap(!targetIsX, 2);
+    const binArrays = [
+      ...new Map(
+        [...forwardArrays, ...reverseArrays].map((array) => [
+          array.publicKey.toBase58(),
+          array,
+        ]),
+      ).values(),
+    ];
+    expect(binArrays.length).to.be.greaterThan(0).and.at.most(4);
+
+    const routeAccounts: Record<string, PublicKey> = {
+      trader: trader.publicKey,
+      wsolMint: NATIVE_MINT,
+      targetMint,
+      userWsol,
+      userTarget,
+      wsolTokenProgram: TOKEN_PROGRAM_ID,
+      targetTokenProgram,
+      systemProgram: SystemProgram.programId,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      pumpProgram: PUMP_AMM_PROGRAM_ID,
+      pumpPool: pumpPoolAddress,
+      pumpGlobalConfig: pumpGlobalAddress,
+      pumpPoolBaseTokenAccount: pumpPool.poolBaseTokenAccount,
+      pumpPoolQuoteTokenAccount: pumpPool.poolQuoteTokenAccount,
+      pumpProtocolFeeRecipient: protocolFeeRecipient,
+      pumpProtocolFeeRecipientTokenAccount: getAssociatedTokenAddressSync(
+        NATIVE_MINT,
+        protocolFeeRecipient,
+        true,
+      ),
+      pumpEventAuthority: PUMP_AMM_EVENT_AUTHORITY_PDA,
+      pumpCoinCreatorVaultAta: getAssociatedTokenAddressSync(
+        NATIVE_MINT,
+        coinCreatorVaultAuthority,
+        true,
+      ),
+      pumpCoinCreatorVaultAuthority: coinCreatorVaultAuthority,
+      pumpGlobalVolumeAccumulator: AMM_GLOBAL_VOLUME_ACCUMULATOR_PDA,
+      pumpUserVolumeAccumulator: userVolumeAccumulatorPda(
+        trader.publicKey,
+        PUMP_AMM_PROGRAM_ID,
+      ),
+      pumpFeeConfig,
+      pumpFeeProgram: PUMP_FEE_PROGRAM_ID,
+      pumpPoolV2: poolV2Pda(targetMint),
+      pumpBuybackFeeRecipient: buybackFeeRecipient,
+      pumpBuybackFeeRecipientTokenAccount: getAssociatedTokenAddressSync(
+        NATIVE_MINT,
+        buybackFeeRecipient,
+        true,
+      ),
+      meteoraProgram: METEORA_PROGRAM_ID,
+      meteoraLbPair: meteoraPoolAddress,
+      meteoraBinArrayBitmapExtension:
+        dlmm.binArrayBitmapExtension?.publicKey ?? METEORA_PROGRAM_ID,
+      meteoraReserveX: dlmm.lbPair.reserveX,
+      meteoraReserveY: dlmm.lbPair.reserveY,
+      meteoraOracle: dlmm.lbPair.oracle,
+      meteoraHostFeeIn: METEORA_PROGRAM_ID,
+      memoProgram: MEMO_PROGRAM_ID,
+      meteoraEventAuthority: deriveEventAuthority(METEORA_PROGRAM_ID)[0],
+    };
+    return {
+      routeAccounts,
+      binArrays,
+      userWsol,
+      userTarget,
+      targetTokenProgram,
+      pumpQuoteVault: pumpPool.poolQuoteTokenAccount,
+    };
+  }
+
+  async function setTokenAccountAmount(address: PublicKey, amount: bigint) {
+    const account = await connection.getAccountInfo(address, "processed");
+    if (!account) throw new Error(`Token account ${address} was not found`);
+    const data = Buffer.from(account.data);
+    data.writeBigUInt64LE(amount, 64);
+    surfnet.setAccount(
+      address.toBase58(),
+      account.lamports,
+      data,
+      account.owner.toBase58(),
+    );
+  }
+
+  async function executeBestDirection(
+    fixture: Awaited<ReturnType<typeof buildBestDirectionFixture>>,
+    expectedFirstProgram: PublicKey,
+  ) {
+    const amountIn = new BN(process.env.SURFPOOL_WSOL_INPUT ?? "1000000");
+    const route = await program.methods
+      .executeBestDirection({
+        wsolAmountIn: amountIn,
+        minProfitLamports: new BN(process.env.SURFPOOL_MIN_PROFIT ?? "1"),
+      })
+      .accounts(fixture.routeAccounts)
+      .remainingAccounts(
+        fixture.binArrays.map(({ publicKey }) => ({
+          pubkey: publicKey,
+          isSigner: false,
+          isWritable: true,
+        })),
+      )
+      .instruction();
+    const lookupTable = await createLookupTable([
+      ...Object.values(fixture.routeAccounts),
+      ...fixture.binArrays.map(({ publicKey }) => publicKey),
+    ]);
+    const initialWsol = (await getAccount(connection, fixture.userWsol)).amount;
+    const initialTarget = (
+      await getAccount(
+        connection,
+        fixture.userTarget,
+        undefined,
+        fixture.targetTokenProgram,
+      )
+    ).amount;
+    const latest = await connection.getLatestBlockhash("processed");
+    const message = new TransactionMessage({
+      payerKey: trader.publicKey,
+      recentBlockhash: latest.blockhash,
+      instructions: [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
+        route,
+      ],
+    }).compileToV0Message([lookupTable]);
+    const transaction = new VersionedTransaction(message);
+    transaction.sign([trader]);
+    const signature = await connection.sendTransaction(transaction, {
+      skipPreflight: false,
+      maxRetries: 0,
+      preflightCommitment: "processed",
+    });
+    const result = await connection.getTransaction(signature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    expect(result?.meta?.err).to.equal(null);
+    const logs = result?.meta?.logMessages ?? [];
+    const pumpInvocation = logs.findIndex((line) =>
+      line.includes(`Program ${PUMP_AMM_PROGRAM_ID.toBase58()} invoke [2]`),
+    );
+    const meteoraInvocation = logs.findIndex((line) =>
+      line.includes(`Program ${METEORA_PROGRAM_ID.toBase58()} invoke [2]`),
+    );
+    expect(pumpInvocation).to.be.greaterThan(-1);
+    expect(meteoraInvocation).to.be.greaterThan(-1);
+    if (expectedFirstProgram.equals(PUMP_AMM_PROGRAM_ID)) {
+      expect(pumpInvocation).to.be.lessThan(meteoraInvocation);
+    } else {
+      expect(meteoraInvocation).to.be.lessThan(pumpInvocation);
+    }
+    const finalWsol = (await getAccount(connection, fixture.userWsol)).amount;
+    const finalTarget = (
+      await getAccount(
+        connection,
+        fixture.userTarget,
+        undefined,
+        fixture.targetTokenProgram,
+      )
+    ).amount;
+    const computeUnits = Number(result?.meta?.computeUnitsConsumed ?? 0);
+    expect(finalWsol > initialWsol).to.equal(true);
+    expect(finalTarget).to.equal(initialTarget);
+    expect(computeUnits).to.be.greaterThan(0).and.lessThan(250_000);
+    return { signature, computeUnits, profit: finalWsol - initialWsol };
+  }
+
   it("executes PumpSwap buy followed by Meteora DLMM swap2", async () => {
     const pumpPoolAddress = new PublicKey(required("SURFPOOL_PUMP_POOL"));
     const pumpGlobalAddress = new PublicKey(
@@ -505,6 +726,38 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     ).to.equal(initialTarget);
     console.log(
       `Surfpool reverse real CPI consumed ${String(result?.meta?.computeUnitsConsumed)} CU`,
+    );
+  });
+
+  it("best-direction selects Pump -> Meteora on a controlled real-protocol state", async () => {
+    const fixture = await buildBestDirectionFixture();
+    const quoteVault = await connection.getAccountInfo(
+      fixture.pumpQuoteVault,
+      "processed",
+    );
+    if (!quoteVault) throw new Error("Pump quote vault was not found");
+    const currentAmount = quoteVault.data.readBigUInt64LE(64);
+    await setTokenAccountAmount(fixture.pumpQuoteVault, currentAmount / 2n);
+
+    const result = await executeBestDirection(fixture, PUMP_AMM_PROGRAM_ID);
+    console.log(
+      `Surfpool best-direction forward consumed ${result.computeUnits} CU, profit=${result.profit}`,
+    );
+  });
+
+  it("best-direction selects Meteora -> Pump on a controlled real-protocol state", async () => {
+    const fixture = await buildBestDirectionFixture();
+    const quoteVault = await connection.getAccountInfo(
+      fixture.pumpQuoteVault,
+      "processed",
+    );
+    if (!quoteVault) throw new Error("Pump quote vault was not found");
+    const currentAmount = quoteVault.data.readBigUInt64LE(64);
+    await setTokenAccountAmount(fixture.pumpQuoteVault, currentAmount * 4n);
+
+    const result = await executeBestDirection(fixture, METEORA_PROGRAM_ID);
+    console.log(
+      `Surfpool best-direction reverse consumed ${result.computeUnits} CU, profit=${result.profit}`,
     );
   });
 });
