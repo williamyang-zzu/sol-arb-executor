@@ -27,3 +27,26 @@ asserts that both real protocol program IDs appear in inner CPI logs.
 Pool-specific addresses are intentionally supplied only through environment
 variables and are not committed.
 `SURFPOOL_MAINNET_RPC_URL` can override the default public mainnet endpoint.
+
+## Historical mainnet milestone evidence
+
+Surfpool lazily clones the current value of every remote account it encounters.
+`timeTravelToSlot` changes the local clock but does not restore historical pool
+account data, so a past profitable pool state must not be represented as a
+Surfpool historical replay.
+
+The two successful mainnet executions and one profit-condition rollback are
+instead pinned as transaction-evidence fixtures. The regression verifies their
+slot, executor invocation, status, compute units, fee, trader WSOL delta, and
+atomic restoration of the trader's non-WSOL token balances:
+
+```bash
+MAINNET_ARCHIVE_RPC_URL=<historical-rpc-url> \
+npm run test:mainnet-milestones
+```
+
+`SURFPOOL_MAINNET_RPC_URL` or `RPC_URL` is used as a fallback. The selected RPC
+must retain `getTransaction` history for the pinned slots. This evidence suite
+does not execute a new trade; the Surfpool suite above remains responsible for
+executing the locally built Program against real protocol accounts at their
+current remote state.

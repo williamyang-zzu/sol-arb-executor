@@ -1,0 +1,27 @@
+{
+  "programId": "RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51",
+  "trader": "DNoB3hqJKTqL9axA1bZyD1yp9ngceJxnPsnoVocyboi2",
+  "wsolMint": "So11111111111111111111111111111111111111112",
+  "successes": [
+    {
+      "signature": "4z2yaSq4mWJpEXA6BgqupPbtVtztTDs2jZxhJPutXBAGeW5J3au35GEzU6E3FEBGuKB7rqHUyxisBTG5TtMJADWL",
+      "slot": 438427198,
+      "wsolProfitLamports": "110127",
+      "feeLamports": 5000,
+      "computeUnitsConsumed": 182923
+    },
+    {
+      "signature": "2FbjbgRdV15zAATPnmYwVg5FaJ2yucxK5tPBnuAvx67eRGKSiFH6nLvm3ru5gdJLNBAn2jLJXV3krHSXcEGkaBfH",
+      "slot": 438427281,
+      "wsolProfitLamports": "71914",
+      "feeLamports": 5000,
+      "computeUnitsConsumed": 199128
+    }
+  ],
+  "rollback": {
+    "signature": "5QsSnyuaPK69mKDHhPWmkhnKogkKBT8PbjGSRVLf3oid42E61fdAQUJKyR54MowDY1kS7Tuou9Pa3pFZbGJybhho",
+    "slot": 438427199,
+    "feeLamports": 5000,
+    "computeUnitsConsumed": 150457
+  }
+}
