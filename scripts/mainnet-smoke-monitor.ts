@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { Connection } from "@solana/web3.js";
 
-type Direction = "pump-to-meteora" | "meteora-to-pump";
+type Direction = "pump-to-meteora" | "meteora-to-pump" | "best-direction";
 type Status = "broadcast" | "success" | "reverted" | "expired";
 
 type BroadcastRecord = {

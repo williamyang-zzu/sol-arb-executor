@@ -64,11 +64,12 @@ const TRANSACTION_INTERVAL_MS = Number(
 const TRANSACTION_DIRECTION =
   process.env.TRANSACTION_DIRECTION ?? "pump-to-meteora";
 
-type Direction = "pump-to-meteora" | "meteora-to-pump";
+type FixedDirection = "pump-to-meteora" | "meteora-to-pump";
+type TransactionMode = FixedDirection | "best-direction";
 
 type BatchRecord = {
   ordinal: number;
-  direction: Direction;
+  direction: TransactionMode;
   signature: string;
   broadcastAt: string;
   broadcastTimestampMs: number;
@@ -330,12 +331,51 @@ async function main(): Promise<void> {
     meteoraEventAuthority: deriveEventAuthority(METEORA_PROGRAM)[0],
   };
 
-  async function build(direction: Direction): Promise<{
+  async function build(direction: TransactionMode): Promise<{
     instruction: TransactionInstruction;
     bins: PublicKey[];
     quote: Record<string, string>;
   }> {
     await dlmm.refetchStates();
+    if (direction === "best-direction") {
+      const [forwardArrays, reverseArrays] = await Promise.all([
+        dlmm.getBinArrayForSwap(true, 2),
+        dlmm.getBinArrayForSwap(false, 2),
+      ]);
+      const arrays = [
+        ...new Map(
+          [...forwardArrays, ...reverseArrays].map((array) => [
+            array.publicKey.toBase58(),
+            array,
+          ]),
+        ).values(),
+      ];
+      if (arrays.length === 0 || arrays.length > 4) {
+        throw new Error(
+          `best-direction requires 1-4 unique Meteora bin arrays, received ${arrays.length}`,
+        );
+      }
+      const instruction = await program.methods
+        .executeBestDirection({
+          wsolAmountIn: WSOL_AMOUNT_IN,
+          minProfitLamports: MIN_PROFIT_LAMPORTS,
+        })
+        .accounts(routeAccounts)
+        .remainingAccounts(
+          arrays.map(({ publicKey }) => ({
+            pubkey: publicKey,
+            isSigner: false,
+            isWritable: true,
+          })),
+        )
+        .instruction();
+      return {
+        instruction,
+        bins: arrays.map(({ publicKey }) => publicKey),
+        quote: { selection: "on-chain" },
+      };
+    }
+
     if (direction === "pump-to-meteora") {
       const pumpState = await pumpOnline.swapSolanaState(
         PUMP_POOL,
@@ -426,22 +466,33 @@ async function main(): Promise<void> {
   if (
     TRANSACTION_DIRECTION !== "pump-to-meteora" &&
     TRANSACTION_DIRECTION !== "meteora-to-pump" &&
+    TRANSACTION_DIRECTION !== "best-direction" &&
     TRANSACTION_DIRECTION !== "alternate"
   ) {
     throw new Error("TRANSACTION_DIRECTION is invalid");
   }
-  const directionFor = (ordinal: number): Direction => {
+  const directionFor = (ordinal: number): TransactionMode => {
     if (TRANSACTION_DIRECTION === "alternate") {
       return ordinal % 2 === 1 ? "pump-to-meteora" : "meteora-to-pump";
     }
-    return TRANSACTION_DIRECTION as Direction;
+    return TRANSACTION_DIRECTION as TransactionMode;
   };
 
-  const initialForward = await build("pump-to-meteora");
-  const initialReverse =
-    TRANSACTION_COUNT === 0 || TRANSACTION_DIRECTION !== "pump-to-meteora"
-      ? await build("meteora-to-pump")
-      : null;
+  const initialModes: TransactionMode[] =
+    TRANSACTION_COUNT === 0
+      ? TRANSACTION_DIRECTION === "best-direction"
+        ? ["best-direction"]
+        : ["pump-to-meteora", "meteora-to-pump"]
+      : TRANSACTION_DIRECTION === "alternate"
+        ? ["pump-to-meteora", "meteora-to-pump"]
+        : [TRANSACTION_DIRECTION as TransactionMode];
+  const initialBuilds = new Map<
+    TransactionMode,
+    Awaited<ReturnType<typeof build>>
+  >();
+  for (const mode of initialModes) {
+    initialBuilds.set(mode, await build(mode));
+  }
   let table: AddressLookupTableAccount;
   let altSignatures: string[] = [];
   if (process.env.ADDRESS_LOOKUP_TABLE) {
@@ -459,8 +510,7 @@ async function main(): Promise<void> {
     const created = await createLookupTable(connection, signer, [
       EXECUTOR,
       ...Object.values(routeAccounts),
-      ...initialForward.bins,
-      ...(initialReverse?.bins ?? []),
+      ...[...initialBuilds.values()].flatMap(({ bins }) => bins),
     ]);
     table = created.table;
     altSignatures = created.signatures;
@@ -500,6 +550,10 @@ async function main(): Promise<void> {
           pumpPool: string;
           meteoraPool: string;
           requestedBroadcasts: number;
+          direction: string;
+          intervalMs: number;
+          wsolAmountIn: string;
+          minProfitLamports: string;
           records: BatchRecord[];
         })
       : null;
@@ -508,7 +562,11 @@ async function main(): Promise<void> {
       (existingManifest.targetMint !== TARGET_MINT.toBase58() ||
         existingManifest.pumpPool !== PUMP_POOL.toBase58() ||
         existingManifest.meteoraPool !== METEORA_POOL.toBase58() ||
-        existingManifest.requestedBroadcasts !== TRANSACTION_COUNT)
+        existingManifest.requestedBroadcasts !== TRANSACTION_COUNT ||
+        existingManifest.direction !== TRANSACTION_DIRECTION ||
+        existingManifest.intervalMs !== TRANSACTION_INTERVAL_MS ||
+        existingManifest.wsolAmountIn !== WSOL_AMOUNT_IN.toString() ||
+        existingManifest.minProfitLamports !== MIN_PROFIT_LAMPORTS.toString())
     ) {
       throw new Error("Existing broadcast manifest configuration mismatch");
     }
@@ -603,33 +661,32 @@ async function main(): Promise<void> {
     return;
   }
 
-  for (const direction of ["pump-to-meteora", "meteora-to-pump"] as const) {
-    const built =
-      direction === "pump-to-meteora" ? initialForward : initialReverse!;
+  for (const mode of initialModes) {
+    const built = initialBuilds.get(mode)!;
     const { transaction } = await transactionFor(built.instruction);
     const result = await connection.simulateTransaction(transaction, {
       commitment: "confirmed",
       sigVerify: true,
     });
-    console.log("Simulation", direction, {
+    console.log("Simulation", mode, {
       quote: built.quote,
       error: result.value.err,
       unitsConsumed: result.value.unitsConsumed,
     });
     if (result.value.err) {
       console.log("Simulation logs", result.value.logs);
-      throw new Error(`${direction} simulation failed`);
+      throw new Error(`${mode} simulation failed`);
     }
   }
 
   if (process.env.SEND_REAL_TRANSACTION !== "true") {
     console.log(
-      "Both simulations passed. SEND_REAL_TRANSACTION is not true; stopping.",
+      "Configured simulations passed. SEND_REAL_TRANSACTION is not true; stopping.",
     );
     return;
   }
 
-  for (const direction of ["pump-to-meteora", "meteora-to-pump"] as const) {
+  for (const direction of initialModes) {
     let confirmed = false;
     for (let attempt = 1; attempt <= 3 && !confirmed; attempt += 1) {
       const built = await build(direction);
