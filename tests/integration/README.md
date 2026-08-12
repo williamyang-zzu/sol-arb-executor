@@ -13,10 +13,17 @@ surfnet and deploys the local executor SBF there:
 
 ```bash
 SURFPOOL_PUMP_POOL=<pump-pool> \
-SURFPOOL_PUMP_GLOBAL_CONFIG=<pump-global-config> \
+SURFPOOL_PUMP_GLOBAL_CONFIG=<optional-pump-global-config-override> \
 SURFPOOL_METEORA_POOL=<meteora-lb-pair> \
 SURFPOOL_TARGET_MINT=<optional-explicit-mint> \
 npm run test:surfpool-real
+```
+
+To run only the four controlled successful routes with the same `300,000 CU`
+limit and `300 micro-lamports/CU` price used by the mainnet smoke sender:
+
+```bash
+npm run test:surfpool-cu-budget
 ```
 
 Use a PumpSwap/WSOL and Meteora/WSOL pair whose target mint is either owned by
@@ -26,6 +33,8 @@ v0 transactions with ALTs, and execute both route directions. Each direction
 asserts that both real protocol program IDs appear in inner CPI logs.
 Pool-specific addresses are intentionally supplied only through environment
 variables and are not committed.
+The Pump global config defaults to the official SDK PDA; the override is kept
+only for compatibility testing.
 `SURFPOOL_MAINNET_RPC_URL` can override the default public mainnet endpoint.
 
 ## Historical mainnet milestone evidence

@@ -10,7 +10,7 @@ import {
   getPumpAmmProgram,
   userVolumeAccumulatorPda,
 } from "@pump-fun/pump-sdk";
-import { poolV2Pda } from "@pump-fun/pump-swap-sdk";
+import { GLOBAL_CONFIG_PDA, poolV2Pda } from "@pump-fun/pump-swap-sdk";
 import { Surfnet } from "@solana/surfpool";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -36,6 +36,7 @@ import {
   VersionedTransaction,
 } from "@solana/web3.js";
 import { expect } from "chai";
+import { computeBudgetInstructions } from "../../scripts/sender-pipeline";
 
 const METEORA_PROGRAM_ID = new PublicKey(
   "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo",
@@ -43,6 +44,8 @@ const METEORA_PROGRAM_ID = new PublicKey(
 const EXECUTOR_PROGRAM_ID = new PublicKey(
   "RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51",
 );
+const SUCCESS_PATH_CU_LIMIT = 300_000;
+const SUCCESS_PATH_CU_PRICE_MICRO_LAMPORTS = 300;
 
 function required(name: string): string {
   const value = process.env[name];
@@ -58,7 +61,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
   let trader: Keypair;
   let program: Program;
 
-  before(() => {
+  beforeEach(() => {
     const payer = Surfnet.newKeypair();
     trader = Keypair.fromSecretKey(Uint8Array.from(payer.secretKey));
     surfnet = Surfnet.startWithConfig({
@@ -85,7 +88,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     program = new Program(idl, provider);
   });
 
-  after(() => {
+  afterEach(() => {
     surfnet?.stop();
   });
 
@@ -158,9 +161,9 @@ describe("Surfpool real-protocol CPI compatibility", function () {
 
   async function buildBestDirectionFixture() {
     const pumpPoolAddress = new PublicKey(required("SURFPOOL_PUMP_POOL"));
-    const pumpGlobalAddress = new PublicKey(
-      required("SURFPOOL_PUMP_GLOBAL_CONFIG"),
-    );
+    const pumpGlobalAddress = process.env.SURFPOOL_PUMP_GLOBAL_CONFIG
+      ? new PublicKey(process.env.SURFPOOL_PUMP_GLOBAL_CONFIG)
+      : GLOBAL_CONFIG_PDA;
     const meteoraPoolAddress = new PublicKey(required("SURFPOOL_METEORA_POOL"));
     const pumpProgram = getPumpAmmProgram(connection);
     const pumpPool = await pumpProgram.account.pool.fetch(pumpPoolAddress);
@@ -333,7 +336,10 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       payerKey: trader.publicKey,
       recentBlockhash: latest.blockhash,
       instructions: [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
+        ...computeBudgetInstructions(
+          SUCCESS_PATH_CU_LIMIT,
+          SUCCESS_PATH_CU_PRICE_MICRO_LAMPORTS,
+        ),
         route,
       ],
     }).compileToV0Message([lookupTable]);
@@ -375,7 +381,9 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     const computeUnits = Number(result?.meta?.computeUnitsConsumed ?? 0);
     expect(finalWsol > initialWsol).to.equal(true);
     expect(finalTarget).to.equal(initialTarget);
-    expect(computeUnits).to.be.greaterThan(0).and.lessThan(250_000);
+    expect(computeUnits)
+      .to.be.greaterThan(0)
+      .and.lessThan(SUCCESS_PATH_CU_LIMIT);
     return { signature, computeUnits, profit: finalWsol - initialWsol };
   }
 
@@ -427,7 +435,10 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       payerKey: trader.publicKey,
       recentBlockhash: latest.blockhash,
       instructions: [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
+        ...computeBudgetInstructions(
+          SUCCESS_PATH_CU_LIMIT,
+          SUCCESS_PATH_CU_PRICE_MICRO_LAMPORTS,
+        ),
         route,
       ],
     }).compileToV0Message([lookupTable]);
@@ -471,15 +482,17 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       finalWsol - initialWsol >= BigInt(args.minProfitLamports.toString()),
     ).to.equal(true);
     expect(finalTarget).to.equal(initialTarget);
-    expect(computeUnits).to.be.greaterThan(0).and.lessThan(250_000);
+    expect(computeUnits)
+      .to.be.greaterThan(0)
+      .and.lessThan(SUCCESS_PATH_CU_LIMIT);
     return { signature, computeUnits, profit: finalWsol - initialWsol };
   }
 
   it("executes PumpSwap buy followed by Meteora DLMM swap2", async () => {
     const pumpPoolAddress = new PublicKey(required("SURFPOOL_PUMP_POOL"));
-    const pumpGlobalAddress = new PublicKey(
-      required("SURFPOOL_PUMP_GLOBAL_CONFIG"),
-    );
+    const pumpGlobalAddress = process.env.SURFPOOL_PUMP_GLOBAL_CONFIG
+      ? new PublicKey(process.env.SURFPOOL_PUMP_GLOBAL_CONFIG)
+      : GLOBAL_CONFIG_PDA;
     const meteoraPoolAddress = new PublicKey(required("SURFPOOL_METEORA_POOL"));
     const spendableWsol = Number(process.env.SURFPOOL_WSOL_INPUT ?? "1000000");
 
@@ -649,9 +662,9 @@ describe("Surfpool real-protocol CPI compatibility", function () {
 
   it("executes Meteora DLMM swap2 followed by PumpSwap sell", async () => {
     const pumpPoolAddress = new PublicKey(required("SURFPOOL_PUMP_POOL"));
-    const pumpGlobalAddress = new PublicKey(
-      required("SURFPOOL_PUMP_GLOBAL_CONFIG"),
-    );
+    const pumpGlobalAddress = process.env.SURFPOOL_PUMP_GLOBAL_CONFIG
+      ? new PublicKey(process.env.SURFPOOL_PUMP_GLOBAL_CONFIG)
+      : GLOBAL_CONFIG_PDA;
     const meteoraPoolAddress = new PublicKey(required("SURFPOOL_METEORA_POOL"));
     const wsolInput = Number(process.env.SURFPOOL_WSOL_INPUT ?? "1000000");
 

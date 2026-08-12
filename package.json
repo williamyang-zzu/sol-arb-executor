@@ -14,6 +14,7 @@
     "test:surfpool-real": "anchor build && mocha --exit -r ts-node/register -t 180000 tests/integration/surfpool-real.spec.ts",
     "test:surfpool-fixed-direction": "anchor build && mocha --exit -r ts-node/register -t 180000 --grep 'fixed-direction succeeds' tests/integration/surfpool-real.spec.ts",
     "test:surfpool-best-direction": "anchor build && mocha --exit -r ts-node/register -t 180000 --grep 'best-direction selects' tests/integration/surfpool-real.spec.ts",
+    "test:surfpool-cu-budget": "anchor build && mocha --exit -r ts-node/register -t 180000 --grep 'controlled real-protocol state' tests/integration/surfpool-real.spec.ts",
     "test:mainnet-milestones": "mocha --exit -r ts-node/register -t 60000 tests/integration/mainnet-milestones.spec.ts",
     "test:quote-parity": "cargo test --manifest-path test-programs/quote-probe/Cargo.toml && mocha --exit -r ts-node/register -t 60000 tests/quote-parity.spec.ts",
     "test:quote-cu": "bash scripts/run-quote-probe-cu.sh",
