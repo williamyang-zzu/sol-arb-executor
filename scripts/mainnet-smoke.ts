@@ -1,7 +1,14 @@
 import "dotenv/config";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { AnchorProvider, BN, Idl, Program, Wallet } from "@coral-xyz/anchor";
+import {
+  AnchorProvider,
+  BN,
+  Idl,
+  Program,
+  Wallet,
+  utils,
+} from "@coral-xyz/anchor";
 import {
   AMM_GLOBAL_VOLUME_ACCUMULATOR_PDA,
   PUMP_AMM_EVENT_AUTHORITY_PDA,
@@ -31,7 +38,7 @@ import DLMM, { MEMO_PROGRAM_ID, deriveEventAuthority } from "@meteora-ag/dlmm";
 import {
   AddressLookupTableAccount,
   AddressLookupTableProgram,
-  ComputeBudgetProgram,
+  BlockhashWithExpiryBlockHeight,
   Connection,
   Keypair,
   PublicKey,
@@ -42,6 +49,14 @@ import {
   VersionedTransaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
+import {
+  AsyncManifestWriter,
+  ConcurrencyGate,
+  computeBudgetInstructions,
+  sanitizedErrorMessage,
+  scheduledBroadcastTimestamp,
+  sleep,
+} from "./sender-pipeline";
 
 const EXECUTOR = new PublicKey("RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51");
 const METEORA_PROGRAM = new PublicKey(
@@ -63,6 +78,19 @@ const TRANSACTION_INTERVAL_MS = Number(
 );
 const TRANSACTION_DIRECTION =
   process.env.TRANSACTION_DIRECTION ?? "pump-to-meteora";
+const COMPUTE_UNIT_LIMIT = Number(process.env.COMPUTE_UNIT_LIMIT ?? "300000");
+const COMPUTE_UNIT_PRICE_MICRO_LAMPORTS = Number(
+  process.env.COMPUTE_UNIT_PRICE_MICRO_LAMPORTS ?? "300",
+);
+const SENDER_MAX_IN_FLIGHT = Number(process.env.SENDER_MAX_IN_FLIGHT ?? "3");
+const TRANSACTION_SIGN_AHEAD_MS = Number(
+  process.env.TRANSACTION_SIGN_AHEAD_MS ?? "150",
+);
+const BLOCKHASH_REFRESH_MS = Number(process.env.BLOCKHASH_REFRESH_MS ?? "400");
+const BLOCKHASH_MAX_AGE_MS = Number(process.env.BLOCKHASH_MAX_AGE_MS ?? "1500");
+const ROUTE_SNAPSHOT_REFRESH_MS = Number(
+  process.env.ROUTE_SNAPSHOT_REFRESH_MS ?? "750",
+);
 
 type FixedDirection = "pump-to-meteora" | "meteora-to-pump";
 type TransactionMode = FixedDirection | "best-direction";
@@ -76,19 +104,49 @@ type BatchRecord = {
   blockhashContextSlot: number;
   broadcastObservedSlot: number | null;
   lastValidBlockHeight: number;
+  scheduledBroadcastAt: string;
+  scheduledBroadcastTimestampMs: number;
+  buildStartedTimestampMs: number;
+  signedTimestampMs: number;
+  buildAndSignDurationMs: number;
+  scheduleDelayMs: number;
+  rpcAcknowledgedAt: string | null;
+  rpcAckDurationMs: number | null;
+  rpcError: string | null;
+  routeSnapshotVersion: number;
+  routeSnapshotAgeMs: number;
+  blockhashAgeMs: number;
   status: "broadcast";
 };
 
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolvePromise) =>
-    setTimeout(resolvePromise, milliseconds),
-  );
-}
+type BuiltRoute = {
+  instruction: TransactionInstruction;
+  bins: PublicKey[];
+  quote: Record<string, string>;
+};
+
+type RouteSnapshot = {
+  version: number;
+  refreshedAtMs: number;
+  builds: Map<TransactionMode, BuiltRoute>;
+};
+
+type CachedBlockhash = {
+  contextSlot: number;
+  value: BlockhashWithExpiryBlockHeight;
+  fetchedAtMs: number;
+};
 
 function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required environment variable ${name}`);
   return value;
+}
+
+function assertIntegerAtLeast(name: string, value: number, minimum: number) {
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`${name} must be a safe integer of at least ${minimum}`);
+  }
 }
 
 function readKeypair(path: string): Keypair {
@@ -333,12 +391,9 @@ async function main(): Promise<void> {
     meteoraEventAuthority: deriveEventAuthority(METEORA_PROGRAM)[0],
   };
 
-  async function build(direction: TransactionMode): Promise<{
-    instruction: TransactionInstruction;
-    bins: PublicKey[];
-    quote: Record<string, string>;
-  }> {
-    await dlmm.refetchStates();
+  async function buildFromCurrentState(
+    direction: TransactionMode,
+  ): Promise<BuiltRoute> {
     if (direction === "best-direction") {
       const [forwardArrays, reverseArrays] = await Promise.all([
         dlmm.getBinArrayForSwap(true, 2),
@@ -473,6 +528,28 @@ async function main(): Promise<void> {
   ) {
     throw new Error("TRANSACTION_DIRECTION is invalid");
   }
+  assertIntegerAtLeast("COMPUTE_UNIT_LIMIT", COMPUTE_UNIT_LIMIT, 1);
+  if (COMPUTE_UNIT_LIMIT > 1_400_000) {
+    throw new Error("COMPUTE_UNIT_LIMIT must not exceed 1400000");
+  }
+  assertIntegerAtLeast(
+    "COMPUTE_UNIT_PRICE_MICRO_LAMPORTS",
+    COMPUTE_UNIT_PRICE_MICRO_LAMPORTS,
+    0,
+  );
+  assertIntegerAtLeast("SENDER_MAX_IN_FLIGHT", SENDER_MAX_IN_FLIGHT, 1);
+  assertIntegerAtLeast(
+    "TRANSACTION_SIGN_AHEAD_MS",
+    TRANSACTION_SIGN_AHEAD_MS,
+    0,
+  );
+  assertIntegerAtLeast("BLOCKHASH_REFRESH_MS", BLOCKHASH_REFRESH_MS, 100);
+  assertIntegerAtLeast("BLOCKHASH_MAX_AGE_MS", BLOCKHASH_MAX_AGE_MS, 100);
+  assertIntegerAtLeast(
+    "ROUTE_SNAPSHOT_REFRESH_MS",
+    ROUTE_SNAPSHOT_REFRESH_MS,
+    250,
+  );
   const directionFor = (ordinal: number): TransactionMode => {
     if (TRANSACTION_DIRECTION === "alternate") {
       return ordinal % 2 === 1 ? "pump-to-meteora" : "meteora-to-pump";
@@ -488,13 +565,32 @@ async function main(): Promise<void> {
       : TRANSACTION_DIRECTION === "alternate"
         ? ["pump-to-meteora", "meteora-to-pump"]
         : [TRANSACTION_DIRECTION as TransactionMode];
-  const initialBuilds = new Map<
-    TransactionMode,
-    Awaited<ReturnType<typeof build>>
-  >();
-  for (const mode of initialModes) {
-    initialBuilds.set(mode, await build(mode));
-  }
+  let routeSnapshotVersion = 0;
+  let routeSnapshot: RouteSnapshot | null = null;
+  let routeRefreshInFlight: Promise<RouteSnapshot> | null = null;
+  const refreshRouteSnapshot = (): Promise<RouteSnapshot> => {
+    if (routeRefreshInFlight) return routeRefreshInFlight;
+    routeRefreshInFlight = (async () => {
+      await dlmm.refetchStates();
+      const builds = new Map<TransactionMode, BuiltRoute>();
+      for (const mode of initialModes) {
+        builds.set(mode, await buildFromCurrentState(mode));
+      }
+      const refreshed: RouteSnapshot = {
+        version: routeSnapshotVersion + 1,
+        refreshedAtMs: Date.now(),
+        builds,
+      };
+      routeSnapshotVersion = refreshed.version;
+      routeSnapshot = refreshed;
+      return refreshed;
+    })().finally(() => {
+      routeRefreshInFlight = null;
+    });
+    return routeRefreshInFlight;
+  };
+  const initialSnapshot = await refreshRouteSnapshot();
+  const initialBuilds = initialSnapshot.builds;
   let table: AddressLookupTableAccount;
   let altSignatures: string[] = [];
   if (process.env.ADDRESS_LOOKUP_TABLE) {
@@ -520,20 +616,60 @@ async function main(): Promise<void> {
   console.log("Lookup table", table.key.toBase58());
   console.log("Lookup table setup signatures", altSignatures);
 
-  async function transactionFor(instruction: TransactionInstruction) {
-    const { context, value: latest } =
-      await connection.getLatestBlockhashAndContext("confirmed");
+  let blockhashCache: CachedBlockhash | null = null;
+  let blockhashRefreshInFlight: Promise<CachedBlockhash> | null = null;
+  const refreshBlockhash = (): Promise<CachedBlockhash> => {
+    if (blockhashRefreshInFlight) return blockhashRefreshInFlight;
+    blockhashRefreshInFlight = connection
+      .getLatestBlockhashAndContext("confirmed")
+      .then(({ context, value }) => {
+        const refreshed = {
+          contextSlot: context.slot,
+          value,
+          fetchedAtMs: Date.now(),
+        };
+        blockhashCache = refreshed;
+        return refreshed;
+      })
+      .finally(() => {
+        blockhashRefreshInFlight = null;
+      });
+    return blockhashRefreshInFlight;
+  };
+  const freshBlockhash = async (): Promise<CachedBlockhash> => {
+    if (
+      !blockhashCache ||
+      Date.now() - blockhashCache.fetchedAtMs > BLOCKHASH_MAX_AGE_MS
+    ) {
+      return refreshBlockhash();
+    }
+    return blockhashCache;
+  };
+
+  async function transactionFor(
+    instruction: TransactionInstruction,
+    cachedBlockhash?: CachedBlockhash,
+  ) {
+    const selectedBlockhash = cachedBlockhash ?? (await refreshBlockhash());
     const message = new TransactionMessage({
       payerKey: signer.publicKey,
-      recentBlockhash: latest.blockhash,
+      recentBlockhash: selectedBlockhash.value.blockhash,
       instructions: [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ...computeBudgetInstructions(
+          COMPUTE_UNIT_LIMIT,
+          COMPUTE_UNIT_PRICE_MICRO_LAMPORTS,
+        ),
         instruction,
       ],
     }).compileToV0Message([table]);
     const transaction = new VersionedTransaction(message);
     transaction.sign([signer]);
-    return { transaction, latest, blockhashContextSlot: context.slot };
+    return {
+      transaction,
+      latest: selectedBlockhash.value,
+      blockhashContextSlot: selectedBlockhash.contextSlot,
+      blockhashFetchedAtMs: selectedBlockhash.fetchedAtMs,
+    };
   }
 
   if (TRANSACTION_COUNT > 0) {
@@ -557,6 +693,10 @@ async function main(): Promise<void> {
           intervalMs: number;
           wsolAmountIn: string;
           minProfitLamports: string;
+          computeUnitLimit?: number;
+          computeUnitPriceMicroLamports?: number;
+          senderMaxInFlight?: number;
+          sendErrors?: number;
           records: BatchRecord[];
         })
       : null;
@@ -569,106 +709,247 @@ async function main(): Promise<void> {
         existingManifest.direction !== TRANSACTION_DIRECTION ||
         existingManifest.intervalMs !== TRANSACTION_INTERVAL_MS ||
         existingManifest.wsolAmountIn !== WSOL_AMOUNT_IN.toString() ||
-        existingManifest.minProfitLamports !== MIN_PROFIT_LAMPORTS.toString())
+        existingManifest.minProfitLamports !== MIN_PROFIT_LAMPORTS.toString() ||
+        existingManifest.computeUnitLimit !== COMPUTE_UNIT_LIMIT ||
+        existingManifest.computeUnitPriceMicroLamports !==
+          COMPUTE_UNIT_PRICE_MICRO_LAMPORTS ||
+        existingManifest.senderMaxInFlight !== SENDER_MAX_IN_FLIGHT)
     ) {
       throw new Error("Existing broadcast manifest configuration mismatch");
     }
     const records: BatchRecord[] = existingManifest?.records ?? [];
-    let sendErrors = 0;
+    let sendErrors = existingManifest?.sendErrors ?? 0;
     let sendingComplete = false;
-    const persist = () => {
-      writeFileSync(
-        reportPath,
-        `${JSON.stringify(
-          {
-            generatedAt: new Date().toISOString(),
-            programId: EXECUTOR.toBase58(),
-            trader: signer.publicKey.toBase58(),
-            targetMint: TARGET_MINT.toBase58(),
-            pumpPool: PUMP_POOL.toBase58(),
-            meteoraPool: METEORA_POOL.toBase58(),
-            direction: TRANSACTION_DIRECTION,
-            requestedBroadcasts: TRANSACTION_COUNT,
-            intervalMs: TRANSACTION_INTERVAL_MS,
-            wsolAmountIn: WSOL_AMOUNT_IN.toString(),
-            minProfitLamports: MIN_PROFIT_LAMPORTS.toString(),
-            sendErrors,
-            sendingComplete,
-            records,
-          },
-          null,
-          2,
-        )}\n`,
-      );
-    };
+    const renderManifest = () =>
+      `${JSON.stringify(
+        {
+          generatedAt: new Date().toISOString(),
+          programId: EXECUTOR.toBase58(),
+          trader: signer.publicKey.toBase58(),
+          targetMint: TARGET_MINT.toBase58(),
+          pumpPool: PUMP_POOL.toBase58(),
+          meteoraPool: METEORA_POOL.toBase58(),
+          direction: TRANSACTION_DIRECTION,
+          requestedBroadcasts: TRANSACTION_COUNT,
+          intervalMs: TRANSACTION_INTERVAL_MS,
+          wsolAmountIn: WSOL_AMOUNT_IN.toString(),
+          minProfitLamports: MIN_PROFIT_LAMPORTS.toString(),
+          computeUnitLimit: COMPUTE_UNIT_LIMIT,
+          computeUnitPriceMicroLamports: COMPUTE_UNIT_PRICE_MICRO_LAMPORTS,
+          senderMaxInFlight: SENDER_MAX_IN_FLIGHT,
+          transactionSignAheadMs: TRANSACTION_SIGN_AHEAD_MS,
+          blockhashRefreshMs: BLOCKHASH_REFRESH_MS,
+          blockhashMaxAgeMs: BLOCKHASH_MAX_AGE_MS,
+          routeSnapshotRefreshMs: ROUTE_SNAPSHOT_REFRESH_MS,
+          sendErrors,
+          sendingComplete,
+          records: [...records].sort((a, b) => a.ordinal - b.ordinal),
+        },
+        null,
+        2,
+      )}\n`;
+    const manifestWriter = new AsyncManifestWriter(reportPath, renderManifest);
+    await manifestWriter.flush();
 
-    let nextBroadcastNotBefore = Date.now();
+    await refreshBlockhash();
+    const blockhashTimer = setInterval(() => {
+      void refreshBlockhash().catch((error) =>
+        console.warn("Blockhash refresh failed", {
+          error: sanitizedErrorMessage(error),
+        }),
+      );
+    }, BLOCKHASH_REFRESH_MS);
+    const routeSnapshotTimer = setInterval(() => {
+      void refreshRouteSnapshot().catch((error) =>
+        console.warn("Route snapshot refresh failed", {
+          error: sanitizedErrorMessage(error),
+        }),
+      );
+    }, ROUTE_SNAPSHOT_REFRESH_MS);
+    const gate = new ConcurrencyGate(SENDER_MAX_IN_FLIGHT);
+    const firstOrdinal = records.length + 1;
+    const scheduleStartedAtMs = Date.now();
+    const scheduledTasks: Promise<void>[] = [];
+
     for (
-      let ordinal = records.length + 1;
+      let ordinal = firstOrdinal;
       ordinal <= TRANSACTION_COUNT;
       ordinal += 1
     ) {
-      let accepted = false;
-      while (!accepted) {
-        try {
-          const direction = directionFor(ordinal);
-          const built = await build(direction);
-          const { transaction, latest, blockhashContextSlot } =
-            await transactionFor(built.instruction);
-          await sleep(Math.max(0, nextBroadcastNotBefore - Date.now()));
-          const broadcastTimestampMs = Date.now();
-          const broadcastObservedSlotPromise = connection
-            .getSlot("processed")
-            .catch((error) => {
-              console.warn("Broadcast slot sample failed", {
-                ordinal,
-                error: error instanceof Error ? error.message : String(error),
-              });
-              return null;
-            });
-          const signature = await connection.sendRawTransaction(
-            transaction.serialize(),
-            { skipPreflight: true, maxRetries: 5 },
+      const scheduledBroadcastTimestampMs = scheduledBroadcastTimestamp(
+        scheduleStartedAtMs,
+        firstOrdinal,
+        ordinal,
+        TRANSACTION_INTERVAL_MS,
+      );
+      scheduledTasks.push(
+        (async () => {
+          await sleep(
+            Math.max(
+              0,
+              scheduledBroadcastTimestampMs -
+                TRANSACTION_SIGN_AHEAD_MS -
+                Date.now(),
+            ),
           );
-          const broadcastObservedSlot = await broadcastObservedSlotPromise;
-          records.push({
-            ordinal,
-            direction,
-            signature,
-            broadcastAt: new Date(broadcastTimestampMs).toISOString(),
-            broadcastTimestampMs,
-            blockhashContextSlot,
-            broadcastObservedSlot,
-            lastValidBlockHeight: latest.lastValidBlockHeight,
-            status: "broadcast",
-          });
-          persist();
-          console.log("Batch broadcast", {
-            ordinal,
-            direction,
-            signature,
-            broadcastAt: new Date(broadcastTimestampMs).toISOString(),
-            blockhashContextSlot,
-            broadcastObservedSlot,
-            lastValidBlockHeight: latest.lastValidBlockHeight,
-          });
-          nextBroadcastNotBefore =
-            broadcastTimestampMs + TRANSACTION_INTERVAL_MS;
-          accepted = true;
-        } catch (error) {
-          sendErrors += 1;
-          persist();
-          console.error("Batch send error", {
-            ordinal,
-            sendErrors,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          await sleep(TRANSACTION_INTERVAL_MS);
-        }
-      }
+          let recorded = false;
+          while (!recorded) {
+            try {
+              const prepared = await gate.run(async () => {
+                const direction = directionFor(ordinal);
+                const buildStartedTimestampMs = Date.now();
+                const selectedSnapshot = routeSnapshot;
+                if (!selectedSnapshot) {
+                  throw new Error("Route snapshot is not initialized");
+                }
+                const built = selectedSnapshot.builds.get(direction);
+                if (!built) {
+                  throw new Error(
+                    `Route snapshot does not contain ${direction}`,
+                  );
+                }
+                const selectedBlockhash = await freshBlockhash();
+                const {
+                  transaction,
+                  latest,
+                  blockhashContextSlot,
+                  blockhashFetchedAtMs,
+                } = await transactionFor(built.instruction, selectedBlockhash);
+                const signedTimestampMs = Date.now();
+                const signature = utils.bytes.bs58.encode(
+                  transaction.signatures[0],
+                );
+                const serialized = transaction.serialize();
+                await sleep(
+                  Math.max(0, scheduledBroadcastTimestampMs - Date.now()),
+                );
+                const broadcastTimestampMs = Date.now();
+                const broadcastObservedSlotPromise = connection
+                  .getSlot("processed")
+                  .catch((error) => {
+                    console.warn("Broadcast slot sample failed", {
+                      ordinal,
+                      error: sanitizedErrorMessage(error),
+                    });
+                    return null;
+                  });
+                let rpcAcknowledgedAt: string | null = null;
+                let rpcAckDurationMs: number | null = null;
+                let rpcError: string | null = null;
+                try {
+                  const returnedSignature = await connection.sendRawTransaction(
+                    serialized,
+                    {
+                      skipPreflight: true,
+                      maxRetries: 5,
+                    },
+                  );
+                  const acknowledgedTimestampMs = Date.now();
+                  rpcAcknowledgedAt = new Date(
+                    acknowledgedTimestampMs,
+                  ).toISOString();
+                  rpcAckDurationMs =
+                    acknowledgedTimestampMs - broadcastTimestampMs;
+                  if (returnedSignature !== signature) {
+                    rpcError = `RPC returned unexpected signature ${returnedSignature}`;
+                    sendErrors += 1;
+                  }
+                } catch (error) {
+                  rpcError = sanitizedErrorMessage(error);
+                  rpcAckDurationMs = Date.now() - broadcastTimestampMs;
+                  sendErrors += 1;
+                }
+                return {
+                  direction,
+                  signature,
+                  broadcastTimestampMs,
+                  broadcastObservedSlotPromise,
+                  buildStartedTimestampMs,
+                  signedTimestampMs,
+                  blockhashContextSlot,
+                  blockhashFetchedAtMs,
+                  latest,
+                  rpcAcknowledgedAt,
+                  rpcAckDurationMs,
+                  rpcError,
+                  routeSnapshotVersion: selectedSnapshot.version,
+                  routeSnapshotAgeMs:
+                    buildStartedTimestampMs - selectedSnapshot.refreshedAtMs,
+                };
+              });
+              const broadcastObservedSlot =
+                await prepared.broadcastObservedSlotPromise;
+              const record: BatchRecord = {
+                ordinal,
+                direction: prepared.direction,
+                signature: prepared.signature,
+                broadcastAt: new Date(
+                  prepared.broadcastTimestampMs,
+                ).toISOString(),
+                broadcastTimestampMs: prepared.broadcastTimestampMs,
+                blockhashContextSlot: prepared.blockhashContextSlot,
+                broadcastObservedSlot,
+                lastValidBlockHeight: prepared.latest.lastValidBlockHeight,
+                scheduledBroadcastAt: new Date(
+                  scheduledBroadcastTimestampMs,
+                ).toISOString(),
+                scheduledBroadcastTimestampMs,
+                buildStartedTimestampMs: prepared.buildStartedTimestampMs,
+                signedTimestampMs: prepared.signedTimestampMs,
+                buildAndSignDurationMs:
+                  prepared.signedTimestampMs - prepared.buildStartedTimestampMs,
+                scheduleDelayMs:
+                  prepared.broadcastTimestampMs - scheduledBroadcastTimestampMs,
+                rpcAcknowledgedAt: prepared.rpcAcknowledgedAt,
+                rpcAckDurationMs: prepared.rpcAckDurationMs,
+                rpcError: prepared.rpcError,
+                routeSnapshotVersion: prepared.routeSnapshotVersion,
+                routeSnapshotAgeMs: prepared.routeSnapshotAgeMs,
+                blockhashAgeMs:
+                  prepared.signedTimestampMs - prepared.blockhashFetchedAtMs,
+                status: "broadcast",
+              };
+              records.push(record);
+              manifestWriter.request();
+              console.log("Batch broadcast", {
+                ordinal,
+                direction: record.direction,
+                signature: record.signature,
+                scheduledBroadcastAt: record.scheduledBroadcastAt,
+                broadcastAt: record.broadcastAt,
+                scheduleDelayMs: record.scheduleDelayMs,
+                rpcAckDurationMs: record.rpcAckDurationMs,
+                rpcError: record.rpcError,
+                blockhashContextSlot: record.blockhashContextSlot,
+                broadcastObservedSlot: record.broadcastObservedSlot,
+                blockhashAgeMs: record.blockhashAgeMs,
+                routeSnapshotVersion: record.routeSnapshotVersion,
+                routeSnapshotAgeMs: record.routeSnapshotAgeMs,
+              });
+              recorded = true;
+            } catch (error) {
+              sendErrors += 1;
+              manifestWriter.request();
+              console.error("Batch preparation error", {
+                ordinal,
+                sendErrors,
+                error: sanitizedErrorMessage(error),
+              });
+              await sleep(100);
+            }
+          }
+        })(),
+      );
+    }
+
+    try {
+      await Promise.all(scheduledTasks);
+    } finally {
+      clearInterval(blockhashTimer);
+      clearInterval(routeSnapshotTimer);
     }
     sendingComplete = true;
-    persist();
+    await manifestWriter.flush();
     console.log("Broadcasting complete", {
       broadcast: records.length,
       sendErrors,
@@ -705,7 +986,7 @@ async function main(): Promise<void> {
   for (const direction of initialModes) {
     let confirmed = false;
     for (let attempt = 1; attempt <= 3 && !confirmed; attempt += 1) {
-      const built = await build(direction);
+      const built = (await refreshRouteSnapshot()).builds.get(direction)!;
       const { transaction, latest } = await transactionFor(built.instruction);
       let signature: string | undefined;
       try {
@@ -766,6 +1047,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error);
+  console.error(sanitizedErrorMessage(error));
   process.exit(1);
 });

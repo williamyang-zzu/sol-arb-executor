@@ -8,7 +8,7 @@
     "lint": "cargo clippy --workspace --all-targets -- -D warnings",
     "test": "npm run test:rust && npm run test:ts",
     "test:rust": "cargo test --workspace",
-    "test:ts": "tsc --outDir target/ts-tests && mocha -t 10000 \"target/ts-tests/tests/instruction-construction.spec.js\"",
+    "test:ts": "tsc --outDir target/ts-tests && mocha -t 10000 \"target/ts-tests/tests/instruction-construction.spec.js\" \"target/ts-tests/tests/sender-pipeline.spec.js\"",
     "test:integration": "bash scripts/run-local-integration.sh",
     "test:integration:client": "tsc --outDir target/ts-integration && mocha -t 120000 \"target/ts-integration/tests/integration/local-validator.spec.js\"",
     "test:surfpool-real": "anchor build && mocha --exit -r ts-node/register -t 180000 tests/integration/surfpool-real.spec.ts",

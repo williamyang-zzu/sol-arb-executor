@@ -2,6 +2,7 @@ import "dotenv/config";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { Connection } from "@solana/web3.js";
+import { sanitizedErrorMessage } from "./sender-pipeline";
 
 type Direction = "pump-to-meteora" | "meteora-to-pump" | "best-direction";
 type Status = "broadcast" | "success" | "reverted" | "expired";
@@ -15,6 +16,18 @@ type BroadcastRecord = {
   blockhashContextSlot?: number;
   broadcastObservedSlot?: number | null;
   lastValidBlockHeight: number;
+  scheduledBroadcastAt?: string;
+  scheduledBroadcastTimestampMs?: number;
+  buildStartedTimestampMs?: number;
+  signedTimestampMs?: number;
+  buildAndSignDurationMs?: number;
+  scheduleDelayMs?: number;
+  rpcAcknowledgedAt?: string | null;
+  rpcAckDurationMs?: number | null;
+  rpcError?: string | null;
+  routeSnapshotVersion?: number;
+  routeSnapshotAgeMs?: number;
+  blockhashAgeMs?: number;
   status: "broadcast";
 };
 
@@ -30,6 +43,13 @@ type Manifest = {
   intervalMs: number;
   wsolAmountIn: string;
   minProfitLamports: string;
+  computeUnitLimit?: number;
+  computeUnitPriceMicroLamports?: number;
+  senderMaxInFlight?: number;
+  transactionSignAheadMs?: number;
+  blockhashRefreshMs?: number;
+  blockhashMaxAgeMs?: number;
+  routeSnapshotRefreshMs?: number;
   sendErrors: number;
   sendingComplete: boolean;
   records: BroadcastRecord[];
@@ -68,6 +88,17 @@ function errorTypeFromLogs(logs: string[], error: unknown): string | null {
   const failedProgram = logs.find((line) => line.includes(" failed:"));
   if (failedProgram) return failedProgram;
   return error ? JSON.stringify(error) : null;
+}
+
+function average(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function percentile(values: number[], fraction: number): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.ceil(sorted.length * fraction) - 1];
 }
 
 async function blockSignatures(
@@ -132,6 +163,16 @@ async function main(): Promise<void> {
     const succeeded = values.filter((record) => record.status === "success");
     const reverted = values.filter((record) => record.status === "reverted");
     const expired = values.filter((record) => record.status === "expired");
+    const scheduleDelays = values.flatMap((record) =>
+      typeof record.scheduleDelayMs === "number"
+        ? [record.scheduleDelayMs]
+        : [],
+    );
+    const rpcAckDurations = values.flatMap((record) =>
+      typeof record.rpcAckDurationMs === "number"
+        ? [record.rpcAckDurationMs]
+        : [],
+    );
     writeFileSync(
       reportPath,
       `${JSON.stringify(
@@ -146,6 +187,13 @@ async function main(): Promise<void> {
             succeeded: succeeded.length,
             reverted: reverted.length,
             expired: expired.length,
+            rpcErrors: values.filter((record) => record.rpcError).length,
+            averageScheduleDelayMs: average(scheduleDelays),
+            p95ScheduleDelayMs: percentile(scheduleDelays, 0.95),
+            maxScheduleDelayMs:
+              scheduleDelays.length > 0 ? Math.max(...scheduleDelays) : null,
+            averageRpcAckDurationMs: average(rpcAckDurations),
+            p95RpcAckDurationMs: percentile(rpcAckDurations, 0.95),
             totalFeeLamports: values.reduce(
               (total, record) => total + (record.feeLamports ?? 0),
               0,
@@ -257,6 +305,13 @@ async function main(): Promise<void> {
               blockhashContextToLandedSlotDelta:
                 record.blockhashContextToLandedSlotDelta,
               broadcastToLandedSlotDelta: record.broadcastToLandedSlotDelta,
+              scheduleDelayMs: record.scheduleDelayMs ?? null,
+              buildAndSignDurationMs: record.buildAndSignDurationMs ?? null,
+              rpcAckDurationMs: record.rpcAckDurationMs ?? null,
+              rpcError: record.rpcError ?? null,
+              blockhashAgeMs: record.blockhashAgeMs ?? null,
+              routeSnapshotVersion: record.routeSnapshotVersion ?? null,
+              routeSnapshotAgeMs: record.routeSnapshotAgeMs ?? null,
               transactionPosition: record.transactionPosition,
               errorType: record.errorType,
               computeUnitsConsumed: record.computeUnitsConsumed,
@@ -266,7 +321,7 @@ async function main(): Promise<void> {
         }
       } catch (error) {
         console.error("Monitor poll error", {
-          error: error instanceof Error ? error.message : String(error),
+          error: sanitizedErrorMessage(error),
         });
       }
     }
@@ -285,6 +340,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error);
+  console.error(sanitizedErrorMessage(error));
   process.exit(1);
 });

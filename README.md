@@ -181,13 +181,17 @@ return error, units consumed, and complete logs. They refuse to send unless
 ### 固定间隔主网冒烟批次
 
 `scripts/mainnet-smoke.ts` 的批次模式将发送器与状态监控器分离。发送器不会等待上一笔交易
-确认：每次刷新池状态、获取新 blockhash、独立构建和签名一笔交易，并保证两次成功广播
-之间至少间隔 `TRANSACTION_INTERVAL_MS`。监控器在后台按签名查询状态，不会阻塞发送循环。
+确认，而是按“启动时间 + 序号 × `TRANSACTION_INTERVAL_MS`”的绝对时间表调度。后台独立
+刷新 route snapshot 和 recent blockhash，交易 N 广播时，后续交易可以并行构建和签名；
+`SENDER_MAX_IN_FLIGHT` 限制在途构建/广播数量，避免 RPC 变慢时无限堆积。
 
 ```bash
 TRANSACTION_COUNT=200 \
 TRANSACTION_INTERVAL_MS=3000 \
 TRANSACTION_DIRECTION=pump-to-meteora \
+COMPUTE_UNIT_LIMIT=300000 \
+COMPUTE_UNIT_PRICE_MICRO_LAMPORTS=300 \
+SENDER_MAX_IN_FLIGHT=3 \
 WSOL_AMOUNT_IN=10000000 \
 MIN_PROFIT_LAMPORTS=10000 \
 SEND_REAL_TRANSACTION=true \
@@ -200,7 +204,9 @@ npm run smoke:mainnet
 并用 `MONITOR_REPORT_FILE` 指定独立的监控结果文件。每条记录包含：
 
 - 广播时间和签名；
+- 计划广播时间、实际广播偏差 `scheduleDelayMs`、构建签名耗时和 RPC ACK 耗时；
 - 获取 recent blockhash 时 RPC 返回的 `blockhashContextSlot`；
+- blockhash 年龄、route snapshot 版本和 snapshot 年龄；
 - 广播请求发出时并行采样的 `broadcastObservedSlot`；
 - 落链 slot 和该交易在区块中的位置（从 1 开始）；
 - `blockhashContextToLandedSlotDelta` 和 `broadcastToLandedSlotDelta`；
@@ -208,8 +214,13 @@ npm run smoke:mainnet
 - Anchor/协议错误类型及原始错误；
 - CU 消耗和手续费 lamports。
 
-RPC 对同一签名的内部重试不增加 `TRANSACTION_COUNT`，也不会生成额外链上交易。发送失败且未
-获得签名时，脚本会按间隔重试当前序号。
+RPC 对同一签名的内部重试不增加 `TRANSACTION_COUNT`，也不会生成额外链上交易。如果 RPC
+ACK 返回错误，发送器仍记录本地已经生成的签名并交给监控器判断是否落链，避免因不确定响应
+重新签名并产生重复成交。只有构建或签名前失败时才重试同一序号。
+
+默认计算预算为 `300,000 CU` 和 `300 micro-lamports/CU`，对应每笔 `90 lamports`
+优先费。Loaded Accounts Data Size limit 暂不猜测设置；应先分别模拟固定方向和链上选方向，
+测出安全下限并预留余量后再启用。
 
 ## Security boundaries and current limitations
 
