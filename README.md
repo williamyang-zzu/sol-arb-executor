@@ -111,8 +111,9 @@ compatibility decisions.
 
 ## Mainnet validation milestone
 
-2026-08-10，部署在主网的执行器完成了首次真实盈利原子执行验证。同一轮受控测试中有
-两笔交易成功提交，扣除各自基础网络费后的净利润分别为 `105,127` 和 `66,914`
+2026-08-10，部署在主网的执行器完成了首次真实盈利原子执行验证；2026-08-11，升级后的
+执行器再次完成盈利原子执行。截至该里程碑，已固定三笔可公开核验的成功交易，合计 WSOL
+毛利润为 `218,614` lamports，仅扣除三笔成功交易各自的基础网络费后为 `203,614`
 lamports。
 
 交易签名、余额计算方式和验证边界见
@@ -181,29 +182,33 @@ return error, units consumed, and complete logs. They refuse to send unless
 
 `scripts/mainnet-smoke.ts` 的批次模式将发送器与状态监控器分离。发送器不会等待上一笔交易
 确认：每次刷新池状态、获取新 blockhash、独立构建和签名一笔交易，并保证两次成功广播
-之间至少间隔 `BATCH_INTERVAL_MS`。监控器在后台按签名查询状态，不会阻塞发送循环。
+之间至少间隔 `TRANSACTION_INTERVAL_MS`。监控器在后台按签名查询状态，不会阻塞发送循环。
 
 ```bash
-BATCH_ATTEMPTS=200 \
-BATCH_INTERVAL_MS=3000 \
-BATCH_DIRECTION=pump-to-meteora \
+TRANSACTION_COUNT=200 \
+TRANSACTION_INTERVAL_MS=3000 \
+TRANSACTION_DIRECTION=pump-to-meteora \
 WSOL_AMOUNT_IN=10000000 \
 MIN_PROFIT_LAMPORTS=10000 \
 SEND_REAL_TRANSACTION=true \
 npm run smoke:mainnet
 ```
 
-`BATCH_ATTEMPTS` 表示生成并广播的唯一签名数量，而不是保证落链的数量。全部签名广播完成后，
-监控器会继续运行，直到每笔交易成功、回滚或 blockhash 过期。默认报告写入
-`target/mainnet-smoke-<timestamp>.json`；可用 `BATCH_REPORT_FILE` 指定路径。每条记录包含：
+`TRANSACTION_COUNT` 表示生成并广播的唯一签名数量，而不是保证落链的数量。全部签名广播完成后，
+监控器会继续运行，直到每笔交易成功、回滚或 blockhash 过期。发送清单默认写入
+`target/mainnet-smoke-broadcasts-<timestamp>.json`；可用 `BROADCAST_MANIFEST_FILE` 指定路径，
+并用 `MONITOR_REPORT_FILE` 指定独立的监控结果文件。每条记录包含：
 
 - 广播时间和签名；
+- 获取 recent blockhash 时 RPC 返回的 `blockhashContextSlot`；
+- 广播请求发出时并行采样的 `broadcastObservedSlot`；
 - 落链 slot 和该交易在区块中的位置（从 1 开始）；
+- `blockhashContextToLandedSlotDelta` 和 `broadcastToLandedSlotDelta`；
 - `success`、`reverted` 或 `expired` 状态；
 - Anchor/协议错误类型及原始错误；
 - CU 消耗和手续费 lamports。
 
-RPC 对同一签名的内部重试不增加 `BATCH_ATTEMPTS`，也不会生成额外链上交易。发送失败且未
+RPC 对同一签名的内部重试不增加 `TRANSACTION_COUNT`，也不会生成额外链上交易。发送失败且未
 获得签名时，脚本会按间隔重试当前序号。
 
 ## Security boundaries and current limitations

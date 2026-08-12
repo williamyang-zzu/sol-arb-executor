@@ -12,6 +12,8 @@ type BroadcastRecord = {
   signature: string;
   broadcastAt: string;
   broadcastTimestampMs: number;
+  blockhashContextSlot?: number;
+  broadcastObservedSlot?: number | null;
   lastValidBlockHeight: number;
   status: "broadcast";
 };
@@ -36,6 +38,8 @@ type Manifest = {
 type MonitoredRecord = Omit<BroadcastRecord, "status"> & {
   status: Status;
   landedSlot: number | null;
+  blockhashContextToLandedSlotDelta: number | null;
+  broadcastToLandedSlotDelta: number | null;
   transactionPosition: number | null;
   confirmationStatus: string | null;
   confirmedAt: string | null;
@@ -168,6 +172,8 @@ async function main(): Promise<void> {
           ...source,
           status: "broadcast",
           landedSlot: null,
+          blockhashContextToLandedSlotDelta: null,
+          broadcastToLandedSlotDelta: null,
           transactionPosition: null,
           confirmationStatus: null,
           confirmedAt: null,
@@ -222,6 +228,14 @@ async function main(): Promise<void> {
             const logs = transaction.meta?.logMessages ?? [];
             record.status = status.err === null ? "success" : "reverted";
             record.landedSlot = status.slot;
+            record.blockhashContextToLandedSlotDelta =
+              typeof record.blockhashContextSlot === "number"
+                ? status.slot - record.blockhashContextSlot
+                : null;
+            record.broadcastToLandedSlotDelta =
+              typeof record.broadcastObservedSlot === "number"
+                ? status.slot - record.broadcastObservedSlot
+                : null;
             record.transactionPosition =
               positions.get(record.signature) ?? null;
             record.confirmationStatus = status.confirmationStatus ?? null;
@@ -238,6 +252,11 @@ async function main(): Promise<void> {
               signature: record.signature,
               status: record.status,
               slot: record.landedSlot,
+              blockhashContextSlot: record.blockhashContextSlot ?? null,
+              broadcastObservedSlot: record.broadcastObservedSlot ?? null,
+              blockhashContextToLandedSlotDelta:
+                record.blockhashContextToLandedSlotDelta,
+              broadcastToLandedSlotDelta: record.broadcastToLandedSlotDelta,
               transactionPosition: record.transactionPosition,
               errorType: record.errorType,
               computeUnitsConsumed: record.computeUnitsConsumed,

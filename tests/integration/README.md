@@ -35,7 +35,7 @@ Surfpool lazily clones the current value of every remote account it encounters.
 account data, so a past profitable pool state must not be represented as a
 Surfpool historical replay.
 
-The two successful mainnet executions and one profit-condition rollback are
+The three successful mainnet executions and one profit-condition rollback are
 instead pinned as transaction-evidence fixtures. The regression verifies their
 slot, executor invocation, status, compute units, fee, trader WSOL delta, and
 atomic restoration of the trader's non-WSOL token balances:

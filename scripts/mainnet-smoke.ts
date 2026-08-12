@@ -73,6 +73,8 @@ type BatchRecord = {
   signature: string;
   broadcastAt: string;
   broadcastTimestampMs: number;
+  blockhashContextSlot: number;
+  broadcastObservedSlot: number | null;
   lastValidBlockHeight: number;
   status: "broadcast";
 };
@@ -519,7 +521,8 @@ async function main(): Promise<void> {
   console.log("Lookup table setup signatures", altSignatures);
 
   async function transactionFor(instruction: TransactionInstruction) {
-    const latest = await connection.getLatestBlockhash("confirmed");
+    const { context, value: latest } =
+      await connection.getLatestBlockhashAndContext("confirmed");
     const message = new TransactionMessage({
       payerKey: signer.publicKey,
       recentBlockhash: latest.blockhash,
@@ -530,7 +533,7 @@ async function main(): Promise<void> {
     }).compileToV0Message([table]);
     const transaction = new VersionedTransaction(message);
     transaction.sign([signer]);
-    return { transaction, latest };
+    return { transaction, latest, blockhashContextSlot: context.slot };
   }
 
   if (TRANSACTION_COUNT > 0) {
@@ -610,21 +613,32 @@ async function main(): Promise<void> {
         try {
           const direction = directionFor(ordinal);
           const built = await build(direction);
-          const { transaction, latest } = await transactionFor(
-            built.instruction,
-          );
+          const { transaction, latest, blockhashContextSlot } =
+            await transactionFor(built.instruction);
           await sleep(Math.max(0, nextBroadcastNotBefore - Date.now()));
           const broadcastTimestampMs = Date.now();
+          const broadcastObservedSlotPromise = connection
+            .getSlot("processed")
+            .catch((error) => {
+              console.warn("Broadcast slot sample failed", {
+                ordinal,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              return null;
+            });
           const signature = await connection.sendRawTransaction(
             transaction.serialize(),
             { skipPreflight: true, maxRetries: 5 },
           );
+          const broadcastObservedSlot = await broadcastObservedSlotPromise;
           records.push({
             ordinal,
             direction,
             signature,
             broadcastAt: new Date(broadcastTimestampMs).toISOString(),
             broadcastTimestampMs,
+            blockhashContextSlot,
+            broadcastObservedSlot,
             lastValidBlockHeight: latest.lastValidBlockHeight,
             status: "broadcast",
           });
@@ -634,6 +648,8 @@ async function main(): Promise<void> {
             direction,
             signature,
             broadcastAt: new Date(broadcastTimestampMs).toISOString(),
+            blockhashContextSlot,
+            broadcastObservedSlot,
             lastValidBlockHeight: latest.lastValidBlockHeight,
           });
           nextBroadcastNotBefore =
