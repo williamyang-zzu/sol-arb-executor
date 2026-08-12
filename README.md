@@ -31,24 +31,24 @@ flowchart LR
 
 ### 模块说明
 
-| 路径 | 职责 |
-| --- | --- |
-| `programs/sol-arb-executor/src/lib.rs` | Anchor Program 入口，暴露固定指令并转发给对应 handler。 |
-| `instructions/mod.rs` | 定义共享的 `ExecuteRoute` 账户集合，并构造各协议需要的账户视图。 |
-| `instructions/pump_to_meteora.rs` | `execute_pump_to_meteora` 的链上执行编排。 |
-| `instructions/meteora_to_pump.rs` | `execute_meteora_to_pump` 的链上执行编排。 |
-| `instructions/post_trade_checks.rs` | 校验动态执行参数，计算第二腿最低回收量，并检查最终利润和目标币余额。 |
-| `adapters/pump_swap.rs` | PumpSwap Pool 验证、指令编码和 CPI 封装。 |
-| `adapters/meteora_dlmm.rs` | Meteora LB Pair、Bitmap、Bin Array 验证及 CPI 封装。 |
-| `utils/account_validation.rs` | 解析外部协议账户的稳定字段前缀，校验 mint、vault/reserve、owner、discriminator 和池归属。 |
-| `utils/token_extensions.rs` | 绑定 Mint、Token Account 与 Token Program，并对白名单内的基础 Token-2022 扩展放行。 |
-| `utils/balance.rs` | 使用 checked arithmetic 计算 reload 前后的正向余额增量。 |
-| `constants.rs` | 固定 WSOL Mint、DEX Program、Fee Program 和 Memo Program 地址。 |
-| `errors.rs` | 集中定义账户、池、余额和算术错误。 |
-| `events.rs` | 定义执行生命周期事件，供外部系统观测交易状态。 |
-| `scripts/` | 从环境变量和账户 JSON 组装指令；默认模拟，仅显式开启后广播。 |
-| `tests/` | Rust 单元测试、TypeScript 指令构造测试及后续集成测试说明。 |
-| `docs/` | 架构细节、协议来源、固定版本和兼容性决策。 |
+| 路径                                   | 职责                                                                                      |
+| -------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `programs/sol-arb-executor/src/lib.rs` | Anchor Program 入口，暴露固定指令并转发给对应 handler。                                   |
+| `instructions/mod.rs`                  | 定义共享的 `ExecuteRoute` 账户集合，并构造各协议需要的账户视图。                          |
+| `instructions/pump_to_meteora.rs`      | `execute_pump_to_meteora` 的链上执行编排。                                                |
+| `instructions/meteora_to_pump.rs`      | `execute_meteora_to_pump` 的链上执行编排。                                                |
+| `instructions/post_trade_checks.rs`    | 校验动态执行参数，计算第二腿最低回收量，并检查最终利润和目标币余额。                      |
+| `adapters/pump_swap.rs`                | PumpSwap Pool 验证、指令编码和 CPI 封装。                                                 |
+| `adapters/meteora_dlmm.rs`             | Meteora LB Pair、Bitmap、Bin Array 验证及 CPI 封装。                                      |
+| `utils/account_validation.rs`          | 解析外部协议账户的稳定字段前缀，校验 mint、vault/reserve、owner、discriminator 和池归属。 |
+| `utils/token_extensions.rs`            | 绑定 Mint、Token Account 与 Token Program，并对白名单内的基础 Token-2022 扩展放行。       |
+| `utils/balance.rs`                     | 使用 checked arithmetic 计算 reload 前后的正向余额增量。                                  |
+| `constants.rs`                         | 固定 WSOL Mint、DEX Program、Fee Program 和 Memo Program 地址。                           |
+| `errors.rs`                            | 集中定义账户、池、余额和算术错误。                                                        |
+| `events.rs`                            | 定义执行生命周期事件，供外部系统观测交易状态。                                            |
+| `scripts/`                             | 从环境变量和账户 JSON 组装指令；默认模拟，仅显式开启后广播。                              |
+| `tests/`                               | Rust 单元测试、TypeScript 指令构造测试及后续集成测试说明。                                |
+| `docs/`                                | 架构细节、协议来源、固定版本和兼容性决策。                                                |
 
 ### 账户与信任边界
 
@@ -72,9 +72,9 @@ flowchart LR
 
 两个方向的指令都接收相同的动态参数，客户端可逐笔设置：
 
-| 参数 | 类型 | 含义 |
-| --- | --- | --- |
-| `wsol_amount_in` | `u64` | 第一腿固定投入的 WSOL 数量，单位为 lamports。 |
+| 参数                  | 类型  | 含义                                                  |
+| --------------------- | ----- | ----------------------------------------------------- |
+| `wsol_amount_in`      | `u64` | 第一腿固定投入的 WSOL 数量，单位为 lamports。         |
 | `min_profit_lamports` | `u64` | 第二腿完成后要求的最小 WSOL 毛利润，单位为 lamports。 |
 
 Program 在第一腿前记录用户 WSOL 和目标币余额，第一腿只投入
@@ -184,6 +184,8 @@ return error, units consumed, and complete logs. They refuse to send unless
 确认，而是按“启动时间 + 序号 × `TRANSACTION_INTERVAL_MS`”的绝对时间表调度。后台独立
 刷新 route snapshot 和 recent blockhash，交易 N 广播时，后续交易可以并行构建和签名；
 `SENDER_MAX_IN_FLIGHT` 限制在途构建/广播数量，避免 RPC 变慢时无限堆积。
+批次模式强制要求配置一个已经激活的 `ADDRESS_LOOKUP_TABLE`，不会在主网批次开始时自动
+创建并锁定新租金，也避免新 ALT 尚未完成 slot warmup 时发送交易。
 
 ```bash
 TRANSACTION_COUNT=200 \

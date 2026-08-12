@@ -173,6 +173,10 @@ async function main(): Promise<void> {
         ? [record.rpcAckDurationMs]
         : [],
     );
+    const manifestRecordCount = manifest?.records.length ?? 0;
+    const uniqueManifestSignatures = new Set(
+      manifest?.records.map(({ signature }) => signature) ?? [],
+    ).size;
     writeFileSync(
       reportPath,
       `${JSON.stringify(
@@ -182,6 +186,10 @@ async function main(): Promise<void> {
           manifest,
           summary: {
             observed: values.length,
+            manifestRecords: manifestRecordCount,
+            uniqueManifestSignatures,
+            duplicateManifestRecords:
+              manifestRecordCount - uniqueManifestSignatures,
             pending: values.filter((record) => record.status === "broadcast")
               .length,
             succeeded: succeeded.length,
@@ -329,7 +337,8 @@ async function main(): Promise<void> {
 
     const complete =
       manifest.sendingComplete &&
-      records.size >= manifest.requestedBroadcasts &&
+      records.size >=
+        new Set(manifest.records.map(({ signature }) => signature)).size &&
       [...records.values()].every((record) => record.status !== "broadcast");
     if (complete) {
       console.log("Monitoring complete", { reportPath });

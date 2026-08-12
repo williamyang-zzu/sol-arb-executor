@@ -5,11 +5,19 @@ import {
   AsyncManifestWriter,
   ConcurrencyGate,
   computeBudgetInstructions,
+  reserveUniqueSignature,
   sanitizedErrorMessage,
   scheduledBroadcastTimestamp,
 } from "../scripts/sender-pipeline";
 
 describe("smoke sender pipeline", () => {
+  it("rejects a duplicate locally signed transaction signature", () => {
+    const signatures = new Set<string>();
+    expect(reserveUniqueSignature(signatures, "first")).to.equal(true);
+    expect(reserveUniqueSignature(signatures, "first")).to.equal(false);
+    expect(reserveUniqueSignature(signatures, "second")).to.equal(true);
+  });
+
   it("redacts RPC URLs and API keys before logging or persistence", () => {
     const message = sanitizedErrorMessage(
       new Error(

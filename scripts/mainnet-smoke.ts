@@ -53,6 +53,7 @@ import {
   AsyncManifestWriter,
   ConcurrencyGate,
   computeBudgetInstructions,
+  reserveUniqueSignature,
   sanitizedErrorMessage,
   scheduledBroadcastTimestamp,
   sleep,
@@ -605,6 +606,11 @@ async function main(): Promise<void> {
     }
     table = response.value;
   } else {
+    if (TRANSACTION_COUNT > 0) {
+      throw new Error(
+        "Repeated sender mode requires ADDRESS_LOOKUP_TABLE; refusing to create and fund a new ALT during a batch",
+      );
+    }
     const created = await createLookupTable(connection, signer, [
       EXECUTOR,
       ...Object.values(routeAccounts),
@@ -767,6 +773,7 @@ async function main(): Promise<void> {
       );
     }, ROUTE_SNAPSHOT_REFRESH_MS);
     const gate = new ConcurrencyGate(SENDER_MAX_IN_FLIGHT);
+    const issuedSignatures = new Set(records.map(({ signature }) => signature));
     const firstOrdinal = records.length + 1;
     const scheduleStartedAtMs = Date.now();
     const scheduledTasks: Promise<void>[] = [];
@@ -808,17 +815,32 @@ async function main(): Promise<void> {
                     `Route snapshot does not contain ${direction}`,
                   );
                 }
-                const selectedBlockhash = await freshBlockhash();
-                const {
-                  transaction,
-                  latest,
-                  blockhashContextSlot,
-                  blockhashFetchedAtMs,
-                } = await transactionFor(built.instruction, selectedBlockhash);
-                const signedTimestampMs = Date.now();
-                const signature = utils.bytes.bs58.encode(
-                  transaction.signatures[0],
-                );
+                let transaction: VersionedTransaction;
+                let latest: BlockhashWithExpiryBlockHeight;
+                let blockhashContextSlot: number;
+                let blockhashFetchedAtMs: number;
+                let signedTimestampMs: number;
+                let signature: string;
+                for (;;) {
+                  const selectedBlockhash = await freshBlockhash();
+                  const builtTransaction = await transactionFor(
+                    built.instruction,
+                    selectedBlockhash,
+                  );
+                  transaction = builtTransaction.transaction;
+                  latest = builtTransaction.latest;
+                  blockhashContextSlot = builtTransaction.blockhashContextSlot;
+                  blockhashFetchedAtMs = builtTransaction.blockhashFetchedAtMs;
+                  signedTimestampMs = Date.now();
+                  signature = utils.bytes.bs58.encode(
+                    transaction.signatures[0],
+                  );
+                  if (reserveUniqueSignature(issuedSignatures, signature)) {
+                    break;
+                  }
+                  await sleep(50);
+                  await refreshBlockhash();
+                }
                 const serialized = transaction.serialize();
                 await sleep(
                   Math.max(0, scheduledBroadcastTimestampMs - Date.now()),

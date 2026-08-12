@@ -38,6 +38,15 @@ export function scheduledBroadcastTimestamp(
   return scheduleStartedAtMs + (ordinal - firstOrdinal) * intervalMs;
 }
 
+export function reserveUniqueSignature(
+  signatures: Set<string>,
+  signature: string,
+): boolean {
+  if (signatures.has(signature)) return false;
+  signatures.add(signature);
+  return true;
+}
+
 export class ConcurrencyGate {
   private active = 0;
   private readonly waiters: Array<() => void> = [];
