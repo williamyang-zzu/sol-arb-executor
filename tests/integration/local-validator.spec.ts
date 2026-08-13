@@ -347,6 +347,7 @@ describe("local-validator SBF CPI integration", function () {
       pumpCoinCreatorVaultAuthority: pumpAuthority,
       pumpGlobalVolumeAccumulator: await createSystemAccount(),
       pumpUserVolumeAccumulator: await createSystemAccount(),
+      pumpUserVolumeAccumulatorWsolAta: await createSystemAccount(),
       pumpFeeConfig: await createSystemAccount(),
       pumpFeeProgram: PUMP_FEE_PROGRAM,
       pumpPoolV2: await createSystemAccount(),

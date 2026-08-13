@@ -38,6 +38,7 @@ function randomAccounts(): Record<string, PublicKey> {
     "pumpCoinCreatorVaultAuthority",
     "pumpGlobalVolumeAccumulator",
     "pumpUserVolumeAccumulator",
+    "pumpUserVolumeAccumulatorWsolAta",
     "pumpFeeConfig",
     "pumpFeeProgram",
     "pumpPoolV2",
@@ -129,8 +130,8 @@ describe("route instruction construction", () => {
       .instruction();
 
     expect(ix.data.length).to.equal(8 + 8 * 2);
-    expect(ix.keys.slice(-3).map((meta) => meta.pubkey.toBase58())).to.deep.equal(
-      binArrays.map((key) => key.toBase58()),
-    );
+    expect(
+      ix.keys.slice(-3).map((meta) => meta.pubkey.toBase58()),
+    ).to.deep.equal(binArrays.map((key) => key.toBase58()));
   });
 });

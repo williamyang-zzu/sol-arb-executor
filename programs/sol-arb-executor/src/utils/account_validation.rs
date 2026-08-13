@@ -16,6 +16,7 @@ const PUMP_QUOTE_MINT_OFFSET: usize = 75;
 const PUMP_BASE_VAULT_OFFSET: usize = 139;
 const PUMP_QUOTE_VAULT_OFFSET: usize = 171;
 const PUMP_COIN_CREATOR_OFFSET: usize = 211;
+const PUMP_IS_CASHBACK_COIN_OFFSET: usize = 244;
 const PUMP_REQUIRED_PREFIX_LEN: usize = PUMP_COIN_CREATOR_OFFSET + 32;
 
 // Stable repr(C) prefix offsets in Meteora LbPair, including the discriminator.
@@ -36,6 +37,7 @@ pub struct PumpPoolPrefix {
     pub base_vault: Pubkey,
     pub quote_vault: Pubkey,
     pub coin_creator: Pubkey,
+    pub is_cashback_coin: bool,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -69,12 +71,20 @@ pub fn parse_pump_pool(data: &[u8]) -> Result<PumpPoolPrefix> {
         ArbError::InvalidAccountData
     );
     check_discriminator(data, &PUMP_POOL_DISCRIMINATOR)?;
+    // The cashback flag was appended after legacy Pool fields. Pools whose
+    // accounts predate the extension are necessarily non-cashback pools.
+    let is_cashback_coin = match data.get(PUMP_IS_CASHBACK_COIN_OFFSET) {
+        None | Some(0) => false,
+        Some(1) => true,
+        Some(_) => return err!(ArbError::InvalidAccountData),
+    };
     Ok(PumpPoolPrefix {
         base_mint: read_pubkey(data, PUMP_BASE_MINT_OFFSET)?,
         quote_mint: read_pubkey(data, PUMP_QUOTE_MINT_OFFSET)?,
         base_vault: read_pubkey(data, PUMP_BASE_VAULT_OFFSET)?,
         quote_vault: read_pubkey(data, PUMP_QUOTE_VAULT_OFFSET)?,
         coin_creator: read_pubkey(data, PUMP_COIN_CREATOR_OFFSET)?,
+        is_cashback_coin,
     })
 }
 
@@ -198,6 +208,18 @@ mod tests {
         assert_eq!(parsed.base_vault, keys[2]);
         assert_eq!(parsed.quote_vault, keys[3]);
         assert_eq!(parsed.coin_creator, keys[4]);
+        assert!(!parsed.is_cashback_coin);
+    }
+
+    #[test]
+    fn parses_cashback_flag_from_extended_pump_pool() {
+        let mut data = vec![0_u8; PUMP_IS_CASHBACK_COIN_OFFSET + 1];
+        data[..8].copy_from_slice(&PUMP_POOL_DISCRIMINATOR);
+        data[PUMP_IS_CASHBACK_COIN_OFFSET] = 1;
+        assert!(parse_pump_pool(&data).unwrap().is_cashback_coin);
+
+        data[PUMP_IS_CASHBACK_COIN_OFFSET] = 2;
+        assert!(parse_pump_pool(&data).is_err());
     }
 
     #[test]

@@ -10,6 +10,8 @@ pub enum ArbError {
     InvalidTokenAccountOwner,
     #[msg("A DEX pool account or one of its vault relationships is invalid")]
     InvalidPool,
+    #[msg("A Pump cashback accumulator account or WSOL ATA is invalid")]
+    InvalidCashbackAccount,
     #[msg("Meteora remaining accounts are empty, too numerous, or malformed")]
     InvalidRemainingAccounts,
     #[msg("A Meteora bin array has the wrong owner, discriminator, or lb_pair")]

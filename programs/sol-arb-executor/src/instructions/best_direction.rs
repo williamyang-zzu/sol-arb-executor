@@ -72,6 +72,7 @@ fn validate_quote_accounts(
     accounts: &ExecuteRoute<'_>,
     bin_arrays: &[AccountInfo<'_>],
 ) -> Result<()> {
+    crate::adapters::pump_swap::validate(&accounts.pump_accounts())?;
     require!(
         bin_arrays.len() <= crate::constants::MAX_BEST_DIRECTION_BIN_ARRAYS,
         ArbError::InvalidRemainingAccounts
@@ -207,28 +208,34 @@ fn select_direction(
         .ok()
     });
 
-    let reverse = quote_dlmm_from_accounts(
-        amount_in,
-        &pair,
-        bin_array_accounts,
-        bitmap_extension,
-        !target_is_x,
-        timestamp,
-    )
-    .ok()
-    .and_then(|dlmm_quote| {
-        pump_sell_base_in(
-            dlmm_quote.amount_out,
-            base_reserve,
-            quote_reserve,
-            pool.virtual_quote_reserves,
-            fees.lp_fee_bps,
-            fees.protocol_fee_bps,
-            fees.creator_fee_bps,
-        )
-        .ok()
-        .map(|pump_sell| (pump_sell.amount_out, dlmm_quote))
-    });
+    let cashback_sell_is_ready =
+        crate::adapters::pump_swap::cashback_sell_is_ready(&accounts.pump_accounts())?;
+    let reverse = cashback_sell_is_ready
+        .then(|| {
+            quote_dlmm_from_accounts(
+                amount_in,
+                &pair,
+                bin_array_accounts,
+                bitmap_extension,
+                !target_is_x,
+                timestamp,
+            )
+            .ok()
+            .and_then(|dlmm_quote| {
+                pump_sell_base_in(
+                    dlmm_quote.amount_out,
+                    base_reserve,
+                    quote_reserve,
+                    pool.virtual_quote_reserves,
+                    fees.lp_fee_bps,
+                    fees.protocol_fee_bps,
+                    fees.creator_fee_bps,
+                )
+                .ok()
+                .map(|pump_sell| (pump_sell.amount_out, dlmm_quote))
+            })
+        })
+        .flatten();
 
     let required_out = amount_in
         .checked_add(min_profit)

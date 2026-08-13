@@ -178,12 +178,14 @@ async function prepareTokenAccounts(
   userWsol: PublicKey,
   userTarget: PublicKey,
   targetTokenProgram: PublicKey,
+  cashbackWsolAta?: PublicKey,
 ): Promise<string | null> {
   const instructions: TransactionInstruction[] = [];
-  const [wsolInfo, targetInfo] = await connection.getMultipleAccountsInfo([
-    userWsol,
-    userTarget,
-  ]);
+  const accountAddresses = cashbackWsolAta
+    ? [userWsol, userTarget, cashbackWsolAta]
+    : [userWsol, userTarget];
+  const [wsolInfo, targetInfo, cashbackWsolInfo] =
+    await connection.getMultipleAccountsInfo(accountAddresses);
   if (!wsolInfo) {
     instructions.push(
       createAssociatedTokenAccountIdempotentInstruction(
@@ -202,6 +204,16 @@ async function prepareTokenAccounts(
         signer.publicKey,
         TARGET_MINT,
         targetTokenProgram,
+      ),
+    );
+  }
+  if (cashbackWsolAta && !cashbackWsolInfo) {
+    instructions.push(
+      createAssociatedTokenAccountIdempotentInstruction(
+        signer.publicKey,
+        cashbackWsolAta,
+        userVolumeAccumulatorPda(signer.publicKey, PUMP_AMM_PROGRAM_ID),
+        NATIVE_MINT,
       ),
     );
   }
@@ -302,15 +314,6 @@ async function main(): Promise<void> {
   );
   console.log("Trader", signer.publicKey.toBase58());
   console.log("Input per direction", WSOL_AMOUNT_IN.toString(), "lamports");
-  const setupSignature = await prepareTokenAccounts(
-    connection,
-    signer,
-    userWsol,
-    userTarget,
-    targetTokenProgram,
-  );
-  if (setupSignature) console.log("Account setup signature", setupSignature);
-
   const pumpProgram = getPumpAmmProgram(connection);
   const pumpPool = await pumpProgram.account.pool.fetch(PUMP_POOL);
   const pumpGlobal =
@@ -321,6 +324,35 @@ async function main(): Promise<void> {
   ) {
     throw new Error("Pump pool mint relationship mismatch");
   }
+  const pumpUserVolumeAccumulator = userVolumeAccumulatorPda(
+    signer.publicKey,
+    PUMP_AMM_PROGRAM_ID,
+  );
+  const pumpUserVolumeAccumulatorWsolAta = getAssociatedTokenAddressSync(
+    NATIVE_MINT,
+    pumpUserVolumeAccumulator,
+    true,
+  );
+  if (pumpPool.isCashbackCoin) {
+    const accumulatorInfo = await connection.getAccountInfo(
+      pumpUserVolumeAccumulator,
+      "confirmed",
+    );
+    if (!accumulatorInfo && TRANSACTION_DIRECTION === "meteora-to-pump") {
+      throw new Error(
+        "Pump cashback user-volume accumulator is not initialized; initialize it with a Pump buy before using fixed Meteora -> Pump",
+      );
+    }
+  }
+  const setupSignature = await prepareTokenAccounts(
+    connection,
+    signer,
+    userWsol,
+    userTarget,
+    targetTokenProgram,
+    pumpPool.isCashbackCoin ? pumpUserVolumeAccumulatorWsolAta : undefined,
+  );
+  if (setupSignature) console.log("Account setup signature", setupSignature);
   const protocolFeeRecipient = pumpGlobal.protocolFeeRecipients[0];
   const buybackFeeRecipient = pumpGlobal.buybackFeeRecipients[0];
   const coinCreatorVaultAuthority = ammCreatorVaultPda(pumpPool.coinCreator);
@@ -367,10 +399,8 @@ async function main(): Promise<void> {
     ),
     pumpCoinCreatorVaultAuthority: coinCreatorVaultAuthority,
     pumpGlobalVolumeAccumulator: AMM_GLOBAL_VOLUME_ACCUMULATOR_PDA,
-    pumpUserVolumeAccumulator: userVolumeAccumulatorPda(
-      signer.publicKey,
-      PUMP_AMM_PROGRAM_ID,
-    ),
+    pumpUserVolumeAccumulator,
+    pumpUserVolumeAccumulatorWsolAta,
     pumpFeeConfig,
     pumpFeeProgram: PUMP_FEE_PROGRAM_ID,
     pumpPoolV2: poolV2Pda(TARGET_MINT),

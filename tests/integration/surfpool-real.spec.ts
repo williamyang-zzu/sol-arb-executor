@@ -160,7 +160,9 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     return mintAccount.owner;
   }
 
-  async function buildBestDirectionFixture() {
+  async function buildBestDirectionFixture(
+    initializeCashbackAccumulator = true,
+  ) {
     const pumpPoolAddress = new PublicKey(required("SURFPOOL_PUMP_POOL"));
     const pumpGlobalAddress = process.env.SURFPOOL_PUMP_GLOBAL_CONFIG
       ? new PublicKey(process.env.SURFPOOL_PUMP_GLOBAL_CONFIG)
@@ -203,6 +205,41 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       [Buffer.from("fee_config"), PUMP_AMM_PROGRAM_ID.toBuffer()],
       PUMP_FEE_PROGRAM_ID,
     )[0];
+    const pumpUserVolumeAccumulator = userVolumeAccumulatorPda(
+      trader.publicKey,
+      PUMP_AMM_PROGRAM_ID,
+    );
+    if (pumpPool.isCashbackCoin && initializeCashbackAccumulator) {
+      const accumulatorData = await pumpProgram.coder.accounts.encode(
+        "userVolumeAccumulator",
+        {
+          user: trader.publicKey,
+          needsClaim: false,
+          totalUnclaimedTokens: new BN(0),
+          totalClaimedTokens: new BN(0),
+          currentSolVolume: new BN(0),
+          lastUpdateTimestamp: new BN(0),
+          hasTotalClaimedTokens: false,
+          cashbackEarned: new BN(0),
+          totalCashbackClaimed: new BN(0),
+        },
+      );
+      const accumulatorWithCurrentSpace = Buffer.alloc(137);
+      accumulatorData.copy(accumulatorWithCurrentSpace);
+      surfnet.setAccount(
+        pumpUserVolumeAccumulator.toBase58(),
+        2_000_000,
+        accumulatorWithCurrentSpace,
+        PUMP_AMM_PROGRAM_ID.toBase58(),
+      );
+    }
+    if (pumpPool.isCashbackCoin) {
+      surfnet.fundToken(
+        pumpUserVolumeAccumulator.toBase58(),
+        NATIVE_MINT.toBase58(),
+        1,
+      );
+    }
     const dlmm = await DLMM.create(connection, meteoraPoolAddress);
     const targetIsX = dlmm.lbPair.tokenXMint.equals(targetMint);
     expect(
@@ -251,9 +288,11 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       ),
       pumpCoinCreatorVaultAuthority: coinCreatorVaultAuthority,
       pumpGlobalVolumeAccumulator: AMM_GLOBAL_VOLUME_ACCUMULATOR_PDA,
-      pumpUserVolumeAccumulator: userVolumeAccumulatorPda(
-        trader.publicKey,
-        PUMP_AMM_PROGRAM_ID,
+      pumpUserVolumeAccumulator,
+      pumpUserVolumeAccumulatorWsolAta: getAssociatedTokenAddressSync(
+        NATIVE_MINT,
+        pumpUserVolumeAccumulator,
+        true,
       ),
       pumpFeeConfig,
       pumpFeeProgram: PUMP_FEE_PROGRAM_ID,
@@ -284,6 +323,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       userTarget,
       targetTokenProgram,
       targetIsX,
+      isCashbackCoin: pumpPool.isCashbackCoin,
       pumpQuoteVault: pumpPool.poolQuoteTokenAccount,
     };
   }
@@ -605,6 +645,11 @@ describe("Surfpool real-protocol CPI compatibility", function () {
         trader.publicKey,
         PUMP_AMM_PROGRAM_ID,
       ),
+      pumpUserVolumeAccumulatorWsolAta: getAssociatedTokenAddressSync(
+        NATIVE_MINT,
+        userVolumeAccumulatorPda(trader.publicKey, PUMP_AMM_PROGRAM_ID),
+        true,
+      ),
       pumpFeeConfig,
       pumpFeeProgram: PUMP_FEE_PROGRAM_ID,
       pumpPoolV2: poolV2Pda(targetMint),
@@ -778,6 +823,11 @@ describe("Surfpool real-protocol CPI compatibility", function () {
         trader.publicKey,
         PUMP_AMM_PROGRAM_ID,
       ),
+      pumpUserVolumeAccumulatorWsolAta: getAssociatedTokenAddressSync(
+        NATIVE_MINT,
+        userVolumeAccumulatorPda(trader.publicKey, PUMP_AMM_PROGRAM_ID),
+        true,
+      ),
       pumpFeeConfig,
       pumpFeeProgram: PUMP_FEE_PROGRAM_ID,
       pumpPoolV2: poolV2Pda(targetMint),
@@ -869,7 +919,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
   });
 
   it("fixed-direction succeeds for Pump -> Meteora on a controlled real-protocol state", async () => {
-    const fixture = await buildBestDirectionFixture();
+    const fixture = await buildBestDirectionFixture(false);
     const quoteVault = await connection.getAccountInfo(
       fixture.pumpQuoteVault,
       "processed",
@@ -879,6 +929,14 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     await setTokenAccountAmount(fixture.pumpQuoteVault, currentAmount / 2n);
 
     const result = await executeFixedDirection(fixture, "pump-to-meteora");
+    if (fixture.isCashbackCoin) {
+      const accumulator = await connection.getAccountInfo(
+        fixture.routeAccounts.pumpUserVolumeAccumulator,
+        "processed",
+      );
+      expect(accumulator?.owner.equals(PUMP_AMM_PROGRAM_ID)).to.equal(true);
+      expect(accumulator?.data.length).to.be.at.least(137);
+    }
     console.log(
       `Surfpool fixed forward consumed ${result.computeUnits} CU, profit=${result.profit}`,
     );
@@ -901,7 +959,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
   });
 
   it("best-direction selects Pump -> Meteora on a controlled real-protocol state", async () => {
-    const fixture = await buildBestDirectionFixture();
+    const fixture = await buildBestDirectionFixture(false);
     const quoteVault = await connection.getAccountInfo(
       fixture.pumpQuoteVault,
       "processed",

@@ -78,6 +78,9 @@ pub struct ExecuteRoute<'info> {
     /// CHECK: Required fixed account for buy_exact_quote_in and validated by PumpSwap.
     #[account(mut)]
     pub pump_user_volume_accumulator: UncheckedAccount<'info>,
+    /// CHECK: Cashback WSOL ATA derived from the user-volume PDA; adapter validates it when used.
+    #[account(mut)]
+    pub pump_user_volume_accumulator_wsol_ata: UncheckedAccount<'info>,
     /// CHECK: Pump fee-program PDA validated by PumpSwap.
     pub pump_fee_config: UncheckedAccount<'info>,
     /// CHECK: Address and executable flag are validated by the Pump adapter.
@@ -145,6 +148,9 @@ impl<'info> ExecuteRoute<'info> {
             coin_creator_vault_authority: self.pump_coin_creator_vault_authority.to_account_info(),
             global_volume_accumulator: self.pump_global_volume_accumulator.to_account_info(),
             user_volume_accumulator: self.pump_user_volume_accumulator.to_account_info(),
+            user_volume_accumulator_wsol_ata: self
+                .pump_user_volume_accumulator_wsol_ata
+                .to_account_info(),
             fee_config: self.pump_fee_config.to_account_info(),
             fee_program: self.pump_fee_program.to_account_info(),
             pool_v2: self.pump_pool_v2.to_account_info(),
