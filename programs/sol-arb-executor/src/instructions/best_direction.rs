@@ -185,7 +185,7 @@ fn select_direction(
         .token_x_mint
         == accounts.target_mint.key();
 
-    let pump_buy = pump_buy_exact_quote_in(
+    let forward = pump_buy_exact_quote_in(
         amount_in,
         base_reserve,
         quote_reserve,
@@ -194,16 +194,18 @@ fn select_direction(
         fees.protocol_fee_bps,
         fees.creator_fee_bps,
     )
-    .map_err(|_| error!(ArbError::BestDirectionQuoteIncomplete))?;
-    let forward = quote_dlmm_from_accounts(
-        pump_buy.amount_out,
-        &pair,
-        bin_array_accounts,
-        bitmap_extension,
-        target_is_x,
-        timestamp,
-    )
-    .map_err(|_| error!(ArbError::BestDirectionQuoteIncomplete))?;
+    .ok()
+    .and_then(|pump_buy| {
+        quote_dlmm_from_accounts(
+            pump_buy.amount_out,
+            &pair,
+            bin_array_accounts,
+            bitmap_extension,
+            target_is_x,
+            timestamp,
+        )
+        .ok()
+    });
 
     let reverse = quote_dlmm_from_accounts(
         amount_in,
@@ -213,30 +215,35 @@ fn select_direction(
         !target_is_x,
         timestamp,
     )
-    .map_err(|_| error!(ArbError::BestDirectionQuoteIncomplete))?;
-    let reverse_final = pump_sell_base_in(
-        reverse.amount_out,
-        base_reserve,
-        quote_reserve,
-        pool.virtual_quote_reserves,
-        fees.lp_fee_bps,
-        fees.protocol_fee_bps,
-        fees.creator_fee_bps,
-    )
-    .map_err(|_| error!(ArbError::BestDirectionQuoteIncomplete))?;
+    .ok()
+    .and_then(|dlmm_quote| {
+        pump_sell_base_in(
+            dlmm_quote.amount_out,
+            base_reserve,
+            quote_reserve,
+            pool.virtual_quote_reserves,
+            fees.lp_fee_bps,
+            fees.protocol_fee_bps,
+            fees.creator_fee_bps,
+        )
+        .ok()
+        .map(|pump_sell| (pump_sell.amount_out, dlmm_quote))
+    });
 
     let required_out = amount_in
         .checked_add(min_profit)
         .ok_or_else(|| error!(ArbError::ArithmeticOverflow))?;
-    let forward_out = forward.amount_out;
-    let reverse_out = reverse_final.amount_out;
+    let forward_out = forward.as_ref().map(|quote| quote.amount_out);
+    let reverse_out = reverse.as_ref().map(|(amount_out, _)| *amount_out);
     let direction = choose_direction(forward_out, reverse_out, required_out)?;
     if direction == SelectedDirection::PumpToMeteora {
+        let forward = forward.ok_or_else(|| error!(ArbError::BestDirectionQuoteIncomplete))?;
         Ok((
             SelectedDirection::PumpToMeteora,
             forward.used_indices[..forward.used_len].to_vec(),
         ))
     } else {
+        let (_, reverse) = reverse.ok_or_else(|| error!(ArbError::BestDirectionQuoteIncomplete))?;
         Ok((
             SelectedDirection::MeteoraToPump,
             reverse.used_indices[..reverse.used_len].to_vec(),
@@ -245,18 +252,25 @@ fn select_direction(
 }
 
 fn choose_direction(
-    forward_out: u64,
-    reverse_out: u64,
+    forward_out: Option<u64>,
+    reverse_out: Option<u64>,
     required_out: u64,
 ) -> Result<SelectedDirection> {
     require!(
-        forward_out >= required_out || reverse_out >= required_out,
+        forward_out.is_some() || reverse_out.is_some(),
+        ArbError::BestDirectionQuoteIncomplete
+    );
+    let forward_out = forward_out.filter(|amount_out| *amount_out >= required_out);
+    let reverse_out = reverse_out.filter(|amount_out| *amount_out >= required_out);
+    require!(
+        forward_out.is_some() || reverse_out.is_some(),
         ArbError::NoProfitableDirection
     );
-    Ok(if forward_out >= reverse_out {
-        SelectedDirection::PumpToMeteora
-    } else {
-        SelectedDirection::MeteoraToPump
+    Ok(match (forward_out, reverse_out) {
+        (Some(forward), Some(reverse)) if reverse > forward => SelectedDirection::MeteoraToPump,
+        (Some(_), _) => SelectedDirection::PumpToMeteora,
+        (None, Some(_)) => SelectedDirection::MeteoraToPump,
+        (None, None) => unreachable!("profitability was checked above"),
     })
 }
 
@@ -392,21 +406,53 @@ mod tests {
     #[test]
     fn chooses_larger_profitable_route_and_breaks_ties_forward() {
         assert_eq!(
-            choose_direction(1_020, 1_010, 1_001).unwrap(),
+            choose_direction(Some(1_020), Some(1_010), 1_001).unwrap(),
             SelectedDirection::PumpToMeteora
         );
         assert_eq!(
-            choose_direction(1_010, 1_020, 1_001).unwrap(),
+            choose_direction(Some(1_010), Some(1_020), 1_001).unwrap(),
             SelectedDirection::MeteoraToPump
         );
         assert_eq!(
-            choose_direction(1_010, 1_010, 1_001).unwrap(),
+            choose_direction(Some(1_010), Some(1_010), 1_001).unwrap(),
             SelectedDirection::PumpToMeteora
         );
     }
 
     #[test]
     fn rejects_when_neither_route_meets_profit_floor() {
-        assert!(choose_direction(1_000, 1_001, 1_002).is_err());
+        assert!(choose_direction(Some(1_000), Some(1_001), 1_002).is_err());
+    }
+
+    #[test]
+    fn selects_forward_when_only_forward_quote_is_complete() {
+        assert_eq!(
+            choose_direction(Some(1_010), None, 1_001).unwrap(),
+            SelectedDirection::PumpToMeteora
+        );
+    }
+
+    #[test]
+    fn selects_reverse_when_only_reverse_quote_is_complete() {
+        assert_eq!(
+            choose_direction(None, Some(1_010), 1_001).unwrap(),
+            SelectedDirection::MeteoraToPump
+        );
+    }
+
+    #[test]
+    fn rejects_as_incomplete_only_when_both_quotes_are_incomplete() {
+        let error = choose_direction(None, None, 1_001).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Both route directions could not be quoted completely"));
+    }
+
+    #[test]
+    fn complete_but_unprofitable_route_is_not_selected_over_incomplete_route() {
+        let error = choose_direction(Some(1_000), None, 1_001).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Neither route direction satisfies the required minimum profit"));
     }
 }

@@ -67,6 +67,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     surfnet = Surfnet.startWithConfig({
       remoteRpcUrl:
         process.env.SURFPOOL_MAINNET_RPC_URL ??
+        process.env.RPC_URL ??
         "https://api.mainnet-beta.solana.com",
       blockProductionMode: "transaction",
       payerSecretKey: Array.from(trader.secretKey),
@@ -282,6 +283,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       userWsol,
       userTarget,
       targetTokenProgram,
+      targetIsX,
       pumpQuoteVault: pumpPool.poolQuoteTokenAccount,
     };
   }
@@ -297,6 +299,32 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       data,
       account.owner.toBase58(),
     );
+  }
+
+  async function clearDlmmOutputLiquidity(
+    addresses: PublicKey[],
+    swapForY: boolean,
+  ) {
+    const binArrayHeaderSize = 8 + 48;
+    const binSize = 144;
+    const outputAmountOffset = swapForY ? 8 : 0;
+    for (const address of addresses) {
+      const account = await connection.getAccountInfo(address, "processed");
+      if (!account) throw new Error(`Bin array ${address} was not found`);
+      const data = Buffer.from(account.data);
+      for (let index = 0; index < 70; index += 1) {
+        data.writeBigUInt64LE(
+          0n,
+          binArrayHeaderSize + index * binSize + outputAmountOffset,
+        );
+      }
+      surfnet.setAccount(
+        address.toBase58(),
+        account.lamports,
+        data,
+        account.owner.toBase58(),
+      );
+    }
   }
 
   async function executeBestDirection(
@@ -901,6 +929,26 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     const result = await executeBestDirection(fixture, METEORA_PROGRAM_ID);
     console.log(
       `Surfpool best-direction reverse consumed ${result.computeUnits} CU, profit=${result.profit}`,
+    );
+  });
+
+  it("best-direction continues to reverse when the forward quote is incomplete on a controlled real-protocol state", async () => {
+    const fixture = await buildBestDirectionFixture();
+    const quoteVault = await connection.getAccountInfo(
+      fixture.pumpQuoteVault,
+      "processed",
+    );
+    if (!quoteVault) throw new Error("Pump quote vault was not found");
+    const currentAmount = quoteVault.data.readBigUInt64LE(64);
+    await setTokenAccountAmount(fixture.pumpQuoteVault, currentAmount * 4n);
+    await clearDlmmOutputLiquidity(
+      fixture.binArrays.map(({ publicKey }) => publicKey),
+      fixture.targetIsX,
+    );
+
+    const result = await executeBestDirection(fixture, METEORA_PROGRAM_ID);
+    console.log(
+      `Surfpool incomplete-forward fallback consumed ${result.computeUnits} CU, profit=${result.profit}`,
     );
   });
 });
