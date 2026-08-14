@@ -42,6 +42,25 @@
 及交易发送条件不公开。主网升级完成前，本条不构成该版本已经部署至主网的声明；升级签名确认后再
 补充链上部署事实。
 
+## 2026-08-14：Pump cashback 兼容版本完成主网验证
+
+- Program ID：`RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51`
+- 能力状态：支持 Pump cashback 相关账户的执行器版本已部署至主网并完成真实协议验证
+- 兼容性结果：验证期间未出现 cashback 账户兼容错误；既有公开指令接口保持兼容
+- 执行结果：升级后的执行器完成一笔盈利原子执行，交易者目标 Token 余额在交易结束后恢复至初始值
+
+| 交易 | 落链 slot | 区块内索引 | 毛利润 | 毛收益率 | 网络费 | 净利润 | 净收益率 | CU |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| [5fqXR4uV…S5Bav](https://solscan.io/tx/5fqXR4uVHgYhNocxyyqXr76BEsqBuzvfu3mhFgVCT62reNWc9u1xZ49FSTKcfQgkzrgWFoScyPPeSbhK1vuS5Bav) | 439,195,088 | 410 | 380,512 | 7.61024% | 5,900 | 374,612 | 7.49224% | 217,595 |
+
+`区块内索引` 采用链上原始数据的零基 `transactionIndex`；该交易对应区块内第 `411` 笔交易。
+
+截至本条里程碑，本文档固定的四笔成功执行合计毛利润为 `599,126` lamports；仅扣除四笔
+成功交易各自的网络费后，合计净利润为 `578,226` lamports。
+
+本条不公开 cashback 账户构造细节、测试资产、市场、执行方向、输入参数、候选评估方式或交易
+发送条件。交易签名仅用于独立验证主网执行事实。
+
 ### 计算口径
 
 毛利润直接取成功交易中交易者 WSOL Token Account 的链上余额变化：
@@ -51,7 +70,7 @@ gross_profit = post_wsol_balance - pre_wsol_balance
 net_profit = gross_profit - transaction_fee
 ```
 
-表中的收益率以该笔交易的公开链上输入为分母。净利润只额外扣除了该笔交易的基础网络费，
+表中的收益率以该笔交易的公开链上输入为分母。净利润只额外扣除了该笔交易的网络费，
 不包含同轮其他交易、账户准备、Address Lookup Table 或其他基础设施成本。
 
 ### 验证边界
