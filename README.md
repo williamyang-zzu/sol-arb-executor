@@ -239,8 +239,9 @@ ACK 返回错误，发送器仍记录本地已经生成的签名并交给监控�
 - Token-2022 is limited to mints whose extension set contains only
   `MetadataPointer` and/or `TokenMetadata`. Transfer Fee, Transfer Hook and all
   other Token-2022 extensions are rejected until explicitly implemented.
-- Pump cashback remaining accounts and Meteora host fees are not supported in
-  the current route interface.
+- Pump cashback pools are supported: the adapter validates the user-volume
+  accumulator and cashback WSOL ATA, then forwards the protocol-required
+  cashback accounts for the relevant buy or sell CPI.
 - The PumpSwap IDL evolves frequently (fee program, creator vault, volume
   accumulators, virtual quote reserves); re-run the protocol audit before a
   production deployment.

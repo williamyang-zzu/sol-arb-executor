@@ -22,9 +22,11 @@ min_base_amount_out, OptionBool(false))`, discriminator
 The current official interface includes protocol fee recipient accounts,
 creator-vault accounts, a separate fee program/config, user/global volume
 accumulators for buys, a conditional `pool_v2` PDA, buyback fee accounts, and
-optional cashback remaining accounts. This MVP does not pass the optional
-cashback account and sets `track_volume=false`, but all fixed accounts and the
-current non-cashback remaining-account tail are present.
+optional cashback remaining accounts. The current adapter parses the Pool
+cashback flag, validates the trader's user-volume accumulator and its WSOL ATA,
+and forwards the required cashback accounts for both buy and sell CPIs. The buy
+instruction still sets `track_volume=false`; volume tracking is intentionally
+disabled and is independent of cashback account compatibility.
 
 The July 2026 documentation also records `virtual_quote_reserves` appended to
 the Pool account. The local validation parser reads the stable prefix through
@@ -46,10 +48,14 @@ implementation rather than the older `swap` instruction. The discriminator is
 account slices (`TransferHookX`, `TransferHookY`) are encoded, followed only by
 the writable bin-array accounts.
 
-The IDL supports independent token X/Y programs and Token-2022 transfer hook
-slices. The MVP intentionally rejects Token-2022 and fixes both token program
-accounts to the legacy SPL Token program, avoiding unvalidated transfer-hook
-forwarding.
+The IDL supports independent token X/Y programs and Token-2022 transfer-hook
+slices. The current implementation fixes WSOL to the legacy SPL Token program,
+while the target mint/account may use either legacy SPL Token or Token-2022.
+Token-2022 support is deliberately limited to mints containing only
+`MetadataPointer` and/or `TokenMetadata`; Transfer Fee, Transfer Hook, and all
+other extensions are rejected. Consequently, Meteora `swap2` continues to
+encode zero-length transfer-hook slices and never forwards unvalidated hook
+accounts.
 
 ## Framework compatibility
 
