@@ -9,6 +9,7 @@ use solana_program::{
     msg, program_error::ProgramError, pubkey::Pubkey,
 };
 
+pub mod amount_search;
 pub mod quote;
 pub mod snapshot_accounts;
 
@@ -27,6 +28,7 @@ fn process_instruction(
     data: &[u8],
 ) -> ProgramResult {
     match data.first().copied() {
+        Some(4) => amount_search::process(_accounts, data),
         Some(0) => {
             if data.len() != 39 {
                 return Err(ProgramError::InvalidInstructionData);

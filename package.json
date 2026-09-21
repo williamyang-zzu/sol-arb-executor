@@ -18,6 +18,7 @@
     "test:mainnet-milestones": "mocha --exit -r ts-node/register -t 60000 tests/integration/mainnet-milestones.spec.ts",
     "test:quote-parity": "cargo test --manifest-path test-programs/quote-probe/Cargo.toml && mocha --exit -r ts-node/register -t 60000 tests/quote-parity.spec.ts",
     "test:quote-cu": "bash scripts/run-quote-probe-cu.sh",
+    "test:amount-search": "cargo test --manifest-path test-programs/quote-probe/Cargo.toml && cargo build-sbf --manifest-path test-programs/quote-probe/Cargo.toml --sbf-out-dir target/quote-probe && ts-node scripts/measure-amount-search.ts",
     "capture:quote-snapshot": "ts-node scripts/capture-quote-parity-snapshot.ts",
     "typecheck": "tsc --noEmit",
     "simulate:pump-to-meteora": "ts-node scripts/simulate-pump-to-meteora.ts",
