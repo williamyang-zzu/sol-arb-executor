@@ -332,10 +332,18 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     const account = await connection.getAccountInfo(address, "processed");
     if (!account) throw new Error(`Token account ${address} was not found`);
     const data = Buffer.from(account.data);
+    const currentAmount = data.readBigUInt64LE(64);
+    const controlledLamports = BigInt(account.lamports) + amount - currentAmount;
+    if (
+      controlledLamports < 0n ||
+      controlledLamports > BigInt(Number.MAX_SAFE_INTEGER)
+    ) {
+      throw new Error("Controlled native token account lamports are out of range");
+    }
     data.writeBigUInt64LE(amount, 64);
     surfnet.setAccount(
       address.toBase58(),
-      account.lamports,
+      Number(controlledLamports),
       data,
       account.owner.toBase58(),
     );
@@ -453,6 +461,124 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       .to.be.greaterThan(0)
       .and.lessThan(SUCCESS_PATH_CU_LIMIT);
     return { signature, computeUnits, profit: finalWsol - initialWsol };
+  }
+
+  async function executeBestDirectionDynamic(
+    fixture: Awaited<ReturnType<typeof buildBestDirectionFixture>>,
+    expectedFirstProgram: PublicKey,
+  ) {
+    const minAmount = new BN(process.env.SURFPOOL_WSOL_INPUT ?? "1000000");
+    const maxAmount = new BN(
+      process.env.SURFPOOL_DYNAMIC_MAX_WSOL_INPUT ?? "5000000",
+    );
+    const route = await program.methods
+      .executeBestDirectionDynamic({
+        minWsolAmountIn: minAmount,
+        maxWsolAmountIn: maxAmount,
+        minProfitLamports: new BN(process.env.SURFPOOL_MIN_PROFIT ?? "1"),
+      })
+      .accounts(fixture.routeAccounts)
+      .remainingAccounts(
+        fixture.binArrays.map(({ publicKey }) => ({
+          pubkey: publicKey,
+          isSigner: false,
+          isWritable: true,
+        })),
+      )
+      .instruction();
+    const lookupTable = await createLookupTable([
+      ...Object.values(fixture.routeAccounts),
+      ...fixture.binArrays.map(({ publicKey }) => publicKey),
+    ]);
+    const initialWsol = (await getAccount(connection, fixture.userWsol)).amount;
+    const initialTarget = (
+      await getAccount(
+        connection,
+        fixture.userTarget,
+        undefined,
+        fixture.targetTokenProgram,
+      )
+    ).amount;
+    const latest = await connection.getLatestBlockhash("processed");
+    const message = new TransactionMessage({
+      payerKey: trader.publicKey,
+      recentBlockhash: latest.blockhash,
+      instructions: [
+        ...computeBudgetInstructions(
+          SUCCESS_PATH_CU_LIMIT,
+          SUCCESS_PATH_CU_PRICE_MICRO_LAMPORTS,
+        ),
+        route,
+      ],
+    }).compileToV0Message([lookupTable]);
+    const transaction = new VersionedTransaction(message);
+    transaction.sign([trader]);
+    const signature = await connection.sendTransaction(transaction, {
+      skipPreflight: false,
+      maxRetries: 0,
+      preflightCommitment: "processed",
+    });
+    const result = await connection.getTransaction(signature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    expect(result?.meta?.err).to.equal(null);
+    const logs = result?.meta?.logMessages ?? [];
+    const pumpInvocation = logs.findIndex((line) =>
+      line.includes(`Program ${PUMP_AMM_PROGRAM_ID.toBase58()} invoke [2]`),
+    );
+    const meteoraInvocation = logs.findIndex((line) =>
+      line.includes(`Program ${METEORA_PROGRAM_ID.toBase58()} invoke [2]`),
+    );
+    expect(pumpInvocation).to.be.greaterThan(-1);
+    expect(meteoraInvocation).to.be.greaterThan(-1);
+    if (expectedFirstProgram.equals(PUMP_AMM_PROGRAM_ID)) {
+      expect(pumpInvocation).to.be.lessThan(meteoraInvocation);
+    } else {
+      expect(meteoraInvocation).to.be.lessThan(pumpInvocation);
+    }
+    const decodedEvents = logs
+      .filter((line) => line.startsWith("Program data: "))
+      .map((line) => program.coder.events.decode(line.slice(14)));
+    const selectedEvent = decodedEvents.find(
+      (event) => event?.name === "dynamicAmountSelected",
+    );
+    expect(
+      selectedEvent,
+      `decoded events: ${decodedEvents
+        .filter((event) => event !== null)
+        .map((event) => event?.name)
+        .join(",")}`,
+    ).not.to.equal(undefined);
+    const selectedAmount = BigInt(
+      String(
+        (selectedEvent?.data as { actualWsolAmountIn: BN })
+          .actualWsolAmountIn,
+      ),
+    );
+    expect(selectedAmount >= BigInt(minAmount.toString())).to.equal(true);
+    expect(selectedAmount <= BigInt(maxAmount.toString())).to.equal(true);
+    const finalWsol = (await getAccount(connection, fixture.userWsol)).amount;
+    const finalTarget = (
+      await getAccount(
+        connection,
+        fixture.userTarget,
+        undefined,
+        fixture.targetTokenProgram,
+      )
+    ).amount;
+    const computeUnits = Number(result?.meta?.computeUnitsConsumed ?? 0);
+    expect(finalWsol > initialWsol).to.equal(true);
+    expect(finalTarget).to.equal(initialTarget);
+    expect(computeUnits)
+      .to.be.greaterThan(0)
+      .and.lessThan(SUCCESS_PATH_CU_LIMIT);
+    return {
+      signature,
+      computeUnits,
+      profit: finalWsol - initialWsol,
+      selectedAmount,
+    };
   }
 
   async function executeFixedDirection(
@@ -987,6 +1113,41 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     const result = await executeBestDirection(fixture, METEORA_PROGRAM_ID);
     console.log(
       `Surfpool best-direction reverse consumed ${result.computeUnits} CU, profit=${result.profit}`,
+    );
+  });
+
+  it("dynamic best-direction selects a bounded Pump -> Meteora amount within 300k CU", async () => {
+    const fixture = await buildBestDirectionFixture(false);
+    const quoteVault = await connection.getAccountInfo(
+      fixture.pumpQuoteVault,
+      "processed",
+    );
+    if (!quoteVault) throw new Error("Pump quote vault was not found");
+    const currentAmount = quoteVault.data.readBigUInt64LE(64);
+    await setTokenAccountAmount(fixture.pumpQuoteVault, currentAmount / 2n);
+
+    const result = await executeBestDirectionDynamic(
+      fixture,
+      PUMP_AMM_PROGRAM_ID,
+    );
+    console.log(
+      `Surfpool dynamic forward consumed ${result.computeUnits} CU, amount=${result.selectedAmount}, profit=${result.profit}`,
+    );
+  });
+
+  it("dynamic best-direction selects a bounded Meteora -> Pump amount within 300k CU", async () => {
+    const fixture = await buildBestDirectionFixture();
+    const quoteVault = await connection.getAccountInfo(
+      fixture.pumpQuoteVault,
+      "processed",
+    );
+    if (!quoteVault) throw new Error("Pump quote vault was not found");
+    const currentAmount = quoteVault.data.readBigUInt64LE(64);
+    await setTokenAccountAmount(fixture.pumpQuoteVault, currentAmount * 4n);
+
+    const result = await executeBestDirectionDynamic(fixture, METEORA_PROGRAM_ID);
+    console.log(
+      `Surfpool dynamic reverse consumed ${result.computeUnits} CU, amount=${result.selectedAmount}, profit=${result.profit}`,
     );
   });
 

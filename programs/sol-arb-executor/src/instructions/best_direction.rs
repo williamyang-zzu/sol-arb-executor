@@ -68,7 +68,7 @@ pub fn handler<'info>(
     }
 }
 
-fn validate_quote_accounts(
+pub(crate) fn validate_quote_accounts(
     accounts: &ExecuteRoute<'_>,
     bin_arrays: &[AccountInfo<'_>],
 ) -> Result<()> {
@@ -383,7 +383,7 @@ fn next_bin(active_id: i32, swap_for_y: bool) -> i32 {
     }
 }
 
-fn ordered_bin_arrays<'info>(
+pub(crate) fn ordered_bin_arrays<'info>(
     accounts: &[AccountInfo<'info>],
     indices: &[i64],
 ) -> Result<Vec<AccountInfo<'info>>> {

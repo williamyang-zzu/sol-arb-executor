@@ -38,4 +38,6 @@ pub enum ArbError {
     BestDirectionQuoteIncomplete,
     #[msg("Neither route direction satisfies the required minimum profit")]
     NoProfitableDirection,
+    #[msg("The dynamic amount range is invalid or exceeds the available WSOL balance")]
+    InvalidDynamicAmountRange,
 }

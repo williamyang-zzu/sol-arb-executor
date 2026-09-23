@@ -7,6 +7,8 @@
 
 - `execute_pump_to_meteora`
 - `execute_meteora_to_pump`
+- `execute_best_direction`
+- `execute_best_direction_dynamic`
 
 ## 架构设计
 
@@ -37,6 +39,8 @@ flowchart LR
 | `instructions/mod.rs`                  | 定义共享的 `ExecuteRoute` 账户集合，并构造各协议需要的账户视图。                          |
 | `instructions/pump_to_meteora.rs`      | `execute_pump_to_meteora` 的链上执行编排。                                                |
 | `instructions/meteora_to_pump.rs`      | `execute_meteora_to_pump` 的链上执行编排。                                                |
+| `instructions/best_direction.rs`       | 对固定输入金额进行链上双向报价并选择可盈利方向。                                          |
+| `instructions/dynamic_amount.rs`       | 在有界输入范围与现有 BinArray 覆盖内复用分段报价，选择绝对毛利润最大的金额和方向。         |
 | `instructions/post_trade_checks.rs`    | 校验动态执行参数，计算第二腿最低回收量，并检查最终利润和目标币余额。                      |
 | `adapters/pump_swap.rs`                | PumpSwap Pool 验证、指令编码和 CPI 封装。                                                 |
 | `adapters/meteora_dlmm.rs`             | Meteora LB Pair、Bitmap、Bin Array 验证及 CPI 封装。                                      |
@@ -68,9 +72,9 @@ flowchart LR
 - 外部协议仍会校验其 global config、oracle、event authority、fee recipient 等协议专属
   PDA；本 Program 在 CPI 前补充与路线强相关的结构和归属校验。
 
-### 动态执行参数与利润条件
+### 固定金额、动态金额与利润条件
 
-两个方向的指令都接收相同的动态参数，客户端可逐笔设置：
+三个既有固定金额指令都接收相同的逐笔参数：
 
 | 参数                  | 类型  | 含义                                                  |
 | --------------------- | ----- | ----------------------------------------------------- |
@@ -90,6 +94,26 @@ required_second_leg_out = max(required_final_wsol - wsol_before_second_leg, 1)
 交易前数值。任何条件不满足都会返回错误，第一腿和第二腿的全部状态变化随交易原子回滚。
 这里计算的是 WSOL 账户内的交易毛利润，不包含交易基础费、优先费或其他由 fee payer
 支付的链外余额成本。
+
+`execute_best_direction_dynamic` 是独立的向后兼容入口，不改变上述三个既有
+固定金额指令。其参数为：
+
+| 参数                        | 类型  | 含义                                                        |
+| --------------------------- | ----- | ----------------------------------------------------------- |
+| `min_wsol_amount_in`        | `u64` | 可选择的最小 WSOL 输入。                                    |
+| `max_wsol_amount_in`        | `u64` | 调用者允许的最大 WSOL 输入；还会受用户 WSOL 余额限制。       |
+| `min_profit_lamports`       | `u64` | 最终仍必须满足的最小 WSOL 毛利润。                           |
+
+Program 使用交易执行时的 Pump 与 Meteora 状态，在调用者提供的 1～4 个
+BinArray 覆盖集合中构建两个方向的有界分段曲线。候选点包含最小/最大可完整报价金额、
+Bin 流动性边界，以及区间内部解析估计点及其相邻整数；所有候选最终都由生产报价函数
+重新精确验证。若调用者上限无法完整报价，较小但完整的候选仍可参与选择；没有完整且满足
+最小利润的候选则在任何 DEX CPI 前失败。选择标准是绝对毛利润最大，相同利润时选择较小
+输入金额，再由既有执行路径完成第二腿 `min_out`、最终 WSOL 利润和目标币零残留检查。
+
+动态金额模式没有扩大账户协议：双向链上报价仍各自最多遍历 2 个 BinArray / 16 个 Bin，
+客户端总共仍最多提供 4 个 BinArray。更大覆盖需求属于客户端的 fail-before-send 策略边界，
+而不是 Meteora 协议限制。
 
 ### 扩展原则
 
@@ -117,8 +141,6 @@ compatibility decisions.
 lamports。
 
 2026-08-13，链上执行容错性增强版完成发布前验收，公开指令接口保持兼容，受控成功路径维持在
-`300,000 CU` 预算内；主网升级状态以里程碑文档中的链上签名为准。
-
 2026-08-14，支持 Pump cashback 相关账户的执行器版本完成主网验证，并新增一笔可公开核验的
 盈利原子执行。截至当前已固定四笔成功交易，合计 WSOL 毛利润为 `599,126` lamports；仅扣除
 四笔成功交易各自的网络费后为 `578,226` lamports。

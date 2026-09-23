@@ -134,4 +134,33 @@ describe("route instruction construction", () => {
       ix.keys.slice(-3).map((meta) => meta.pubkey.toBase58()),
     ).to.deep.equal(binArrays.map((key) => key.toBase58()));
   });
+
+  it("constructs dynamic best-direction with an explicit bounded amount range", async () => {
+    const binArrays = [
+      Keypair.generate().publicKey,
+      Keypair.generate().publicKey,
+      Keypair.generate().publicKey,
+      Keypair.generate().publicKey,
+    ];
+    const ix = await program.methods
+      .executeBestDirectionDynamic({
+        minWsolAmountIn: new BN(5_000_000),
+        maxWsolAmountIn: new BN(250_000_000),
+        minProfitLamports: new BN(10_000),
+      })
+      .accounts(randomAccounts())
+      .remainingAccounts(
+        binArrays.map((pubkey) => ({
+          pubkey,
+          isSigner: false,
+          isWritable: true,
+        })),
+      )
+      .instruction();
+
+    expect(ix.data.length).to.equal(8 + 8 * 3);
+    expect(
+      ix.keys.slice(-4).map((meta) => meta.pubkey.toBase58()),
+    ).to.deep.equal(binArrays.map((key) => key.toBase58()));
+  });
 });

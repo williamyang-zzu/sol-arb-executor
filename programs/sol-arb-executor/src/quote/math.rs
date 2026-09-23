@@ -280,6 +280,60 @@ pub fn dlmm_quote_exact_in_partial(
     dlmm_quote_exact_in_impl(amount_in, bins, swap_for_y, fee_on_input, parameters, false)
 }
 
+/// Returns the gross input, net output, and fee required to consume all
+/// executable liquidity exposed by one DLMM bin.
+///
+/// This is intentionally built from the same exact-in arithmetic as the
+/// production quote path. Dynamic amount selection uses it to construct a
+/// bounded piecewise curve without re-quoting every candidate from the active
+/// bin.
+pub fn dlmm_bin_quote_capacity(
+    bin: &Bin,
+    swap_for_y: bool,
+    fee_on_input: bool,
+    parameters: DlmmFeeParameters,
+) -> Result<QuoteResult, QuoteError> {
+    let quote = dlmm_quote_exact_in_partial(
+        u64::MAX,
+        core::slice::from_ref(bin),
+        swap_for_y,
+        fee_on_input,
+        parameters,
+    )?;
+    if quote.amount_in == 0 || quote.amount_out == 0 {
+        return Err(QuoteError::InsufficientLiquidity);
+    }
+    Ok(quote)
+}
+
+/// Quotes an input that is known to stay inside one previously measured bin
+/// capacity. This is algebraically identical to the one-bin partial path but
+/// lets a bounded optimizer retain only compact segment metadata instead of a
+/// full [`Bin`] copy and fee-parameter bundle for every visited bin.
+pub fn dlmm_bin_output_within_capacity(
+    amount_in: u64,
+    capacity_in: u64,
+    capacity_out: u64,
+    price_q64: u128,
+    swap_for_y: bool,
+    fee_on_input: bool,
+    fee_rate: u128,
+) -> Result<u64, QuoteError> {
+    if amount_in == 0 || amount_in > capacity_in || capacity_in == 0 || capacity_out == 0 {
+        return Err(QuoteError::InvalidInput);
+    }
+    if amount_in == capacity_in {
+        return Ok(capacity_out);
+    }
+    if fee_on_input {
+        let (net_input, _) = excluded_fee_amount(amount_in, fee_rate)?;
+        amount_out_for_in(net_input, price_q64, swap_for_y)
+    } else {
+        let raw_output = amount_out_for_in(amount_in, price_q64, swap_for_y)?;
+        excluded_fee_amount(raw_output, fee_rate).map(|(output, _)| output)
+    }
+}
+
 fn dlmm_quote_exact_in_impl(
     amount_in: u64,
     bins: &[Bin],
@@ -508,5 +562,85 @@ mod tests {
         .unwrap();
         assert_eq!(quote.amount_out, 249);
         assert_eq!(quote.fee, 1);
+    }
+
+    #[test]
+    fn reports_one_bin_gross_capacity_with_the_same_quote_math() {
+        let bin = Bin {
+            price_q64: 1_u128 << 64,
+            amount_x: 0,
+            amount_y: 1_000,
+            open_order_amount: 0,
+            processed_order_remaining_amount: 0,
+            limit_order_ask_side: false,
+        };
+        let parameters = DlmmFeeParameters {
+            bin_step: 10,
+            base_factor: 200,
+            base_fee_power_factor: 0,
+            variable_fee_control: 0,
+            volatility_accumulator: 0,
+        };
+        let capacity = dlmm_bin_quote_capacity(&bin, true, true, parameters).unwrap();
+        assert_eq!(capacity.amount_out, 1_000);
+        assert!(capacity.amount_in >= 1_000);
+        assert_eq!(
+            dlmm_quote_exact_in(capacity.amount_in, &[bin], true, true, parameters,).unwrap(),
+            capacity
+        );
+        let fee_rate = dlmm_total_fee_rate(parameters).unwrap();
+        for amount in [1, capacity.amount_in / 2, capacity.amount_in] {
+            let expected =
+                dlmm_quote_exact_in_partial(amount, &[bin], true, true, parameters).unwrap();
+            assert_eq!(
+                dlmm_bin_output_within_capacity(
+                    amount,
+                    capacity.amount_in,
+                    capacity.amount_out,
+                    bin.price_q64,
+                    true,
+                    true,
+                    fee_rate,
+                )
+                .unwrap(),
+                expected.amount_out
+            );
+        }
+    }
+
+    #[test]
+    fn compact_bin_segment_matches_output_fee_quote_math() {
+        let bin = Bin {
+            price_q64: (1_u128 << 64) * 103 / 100,
+            amount_x: 10_000,
+            amount_y: 0,
+            open_order_amount: 0,
+            processed_order_remaining_amount: 0,
+            limit_order_ask_side: false,
+        };
+        let parameters = DlmmFeeParameters {
+            bin_step: 10,
+            base_factor: 200,
+            base_fee_power_factor: 0,
+            variable_fee_control: 0,
+            volatility_accumulator: 0,
+        };
+        let capacity = dlmm_bin_quote_capacity(&bin, false, false, parameters).unwrap();
+        let amount = capacity.amount_in / 2;
+        let expected =
+            dlmm_quote_exact_in_partial(amount, &[bin], false, false, parameters).unwrap();
+        assert_eq!(
+            dlmm_bin_output_within_capacity(
+                amount,
+                capacity.amount_in,
+                capacity.amount_out,
+                bin.price_q64,
+                false,
+                false,
+                dlmm_total_fee_rate(parameters).unwrap(),
+            )
+            .unwrap(),
+            expected.amount_out
+        );
     }
 }

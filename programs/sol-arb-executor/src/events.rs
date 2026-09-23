@@ -37,6 +37,22 @@ pub struct RouteCompleted {
     pub second_leg_wsol_delta: u64,
 }
 
+#[event]
+pub struct DynamicAmountSelected {
+    pub direction: RouteDirection,
+    pub min_wsol_amount_in: u64,
+    pub max_wsol_amount_in: u64,
+    pub balance_limited_max: u64,
+    pub largest_complete_amount: u64,
+    pub actual_wsol_amount_in: u64,
+    pub expected_wsol_amount_out: u64,
+    pub expected_profit_lamports: u64,
+    pub visited_bins: u8,
+    pub boundary_candidates: u8,
+    pub interior_candidates: u8,
+    pub early_stop_used: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::RouteDirection;
