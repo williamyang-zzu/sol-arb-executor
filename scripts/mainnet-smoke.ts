@@ -71,6 +71,13 @@ const METEORA_POOL = new PublicKey(
   process.env.METEORA_POOL ?? "GsKmn6qcL13MctorxXfKeUsVLz2c91uPFWMPXPU4Whni",
 );
 const WSOL_AMOUNT_IN = new BN(required("WSOL_AMOUNT_IN"));
+const AMOUNT_SELECTION_MODE = process.env.AMOUNT_SELECTION_MODE ?? "fixed";
+const WSOL_MIN_AMOUNT_IN = new BN(
+  process.env.WSOL_MIN_AMOUNT_IN ?? WSOL_AMOUNT_IN.toString(),
+);
+const WSOL_MAX_AMOUNT_IN = new BN(
+  process.env.WSOL_MAX_AMOUNT_IN ?? WSOL_AMOUNT_IN.toString(),
+);
 const MIN_PROFIT_LAMPORTS = new BN(process.env.MIN_PROFIT_LAMPORTS ?? "10000");
 const DESIRED_WSOL_BALANCE = 12_000_000n;
 const TRANSACTION_COUNT = Number(process.env.TRANSACTION_COUNT ?? "0");
@@ -288,6 +295,8 @@ async function main(): Promise<void> {
     readFileSync("target/idl/sol_arb_executor.json", "utf8"),
   ) as Idl;
   const program = new Program(idl, provider);
+  const simulationOnly =
+    TRANSACTION_COUNT === 0 && process.env.SEND_REAL_TRANSACTION !== "true";
   if (!program.programId.equals(EXECUTOR)) {
     throw new Error(`IDL program ID mismatch: ${program.programId}`);
   }
@@ -344,15 +353,38 @@ async function main(): Promise<void> {
       );
     }
   }
-  const setupSignature = await prepareTokenAccounts(
-    connection,
-    signer,
-    userWsol,
-    userTarget,
-    targetTokenProgram,
-    pumpPool.isCashbackCoin ? pumpUserVolumeAccumulatorWsolAta : undefined,
-  );
-  if (setupSignature) console.log("Account setup signature", setupSignature);
+  if (simulationOnly) {
+    const [wsolInfo, targetInfo] = await connection.getMultipleAccountsInfo(
+      [userWsol, userTarget],
+      "confirmed",
+    );
+    if (!wsolInfo || !targetInfo) {
+      throw new Error(
+        "Simulation-only mode requires existing WSOL and target token accounts",
+      );
+    }
+    const requiredWsol = BigInt(
+      AMOUNT_SELECTION_MODE === "dynamic"
+        ? WSOL_MIN_AMOUNT_IN.toString()
+        : WSOL_AMOUNT_IN.toString(),
+    );
+    const currentWsol = (await getAccount(connection, userWsol)).amount;
+    if (currentWsol < requiredWsol) {
+      throw new Error(
+        "Simulation-only mode requires an existing sufficient WSOL balance",
+      );
+    }
+  } else {
+    const setupSignature = await prepareTokenAccounts(
+      connection,
+      signer,
+      userWsol,
+      userTarget,
+      targetTokenProgram,
+      pumpPool.isCashbackCoin ? pumpUserVolumeAccumulatorWsolAta : undefined,
+    );
+    if (setupSignature) console.log("Account setup signature", setupSignature);
+  }
   const protocolFeeRecipient = pumpGlobal.protocolFeeRecipients[0];
   const buybackFeeRecipient = pumpGlobal.buybackFeeRecipients[0];
   const coinCreatorVaultAuthority = ammCreatorVaultPda(pumpPool.coinCreator);
@@ -443,20 +475,30 @@ async function main(): Promise<void> {
           `best-direction requires 1-4 unique Meteora bin arrays, received ${arrays.length}`,
         );
       }
-      const instruction = await program.methods
-        .executeBestDirection({
-          wsolAmountIn: WSOL_AMOUNT_IN,
-          minProfitLamports: MIN_PROFIT_LAMPORTS,
-        })
-        .accounts(routeAccounts)
-        .remainingAccounts(
-          arrays.map(({ publicKey }) => ({
-            pubkey: publicKey,
-            isSigner: false,
-            isWritable: true,
-          })),
-        )
-        .instruction();
+      const remainingAccounts = arrays.map(({ publicKey }) => ({
+        pubkey: publicKey,
+        isSigner: false,
+        isWritable: true,
+      }));
+      const instruction =
+        AMOUNT_SELECTION_MODE === "dynamic"
+          ? await program.methods
+              .executeBestDirectionDynamic({
+                minWsolAmountIn: WSOL_MIN_AMOUNT_IN,
+                maxWsolAmountIn: WSOL_MAX_AMOUNT_IN,
+                minProfitLamports: MIN_PROFIT_LAMPORTS,
+              })
+              .accounts(routeAccounts)
+              .remainingAccounts(remainingAccounts)
+              .instruction()
+          : await program.methods
+              .executeBestDirection({
+                wsolAmountIn: WSOL_AMOUNT_IN,
+                minProfitLamports: MIN_PROFIT_LAMPORTS,
+              })
+              .accounts(routeAccounts)
+              .remainingAccounts(remainingAccounts)
+              .instruction();
       return {
         instruction,
         bins: arrays.map(({ publicKey }) => publicKey),
@@ -559,6 +601,23 @@ async function main(): Promise<void> {
   ) {
     throw new Error("TRANSACTION_DIRECTION is invalid");
   }
+  if (
+    AMOUNT_SELECTION_MODE !== "fixed" &&
+    AMOUNT_SELECTION_MODE !== "dynamic"
+  ) {
+    throw new Error("AMOUNT_SELECTION_MODE must be fixed or dynamic");
+  }
+  if (
+    AMOUNT_SELECTION_MODE === "dynamic" &&
+    TRANSACTION_DIRECTION !== "best-direction"
+  ) {
+    throw new Error(
+      "AMOUNT_SELECTION_MODE=dynamic requires TRANSACTION_DIRECTION=best-direction",
+    );
+  }
+  if (WSOL_MIN_AMOUNT_IN.lten(0) || WSOL_MAX_AMOUNT_IN.lt(WSOL_MIN_AMOUNT_IN)) {
+    throw new Error("Dynamic WSOL amount range is invalid");
+  }
   assertIntegerAtLeast("COMPUTE_UNIT_LIMIT", COMPUTE_UNIT_LIMIT, 1);
   if (COMPUTE_UNIT_LIMIT > 1_400_000) {
     throw new Error("COMPUTE_UNIT_LIMIT must not exceed 1400000");
@@ -636,6 +695,11 @@ async function main(): Promise<void> {
     }
     table = response.value;
   } else {
+    if (simulationOnly) {
+      throw new Error(
+        "Simulation-only mode requires an existing ADDRESS_LOOKUP_TABLE",
+      );
+    }
     if (TRANSACTION_COUNT > 0) {
       throw new Error(
         "Repeated sender mode requires ADDRESS_LOOKUP_TABLE; refusing to create and fund a new ALT during a batch",
