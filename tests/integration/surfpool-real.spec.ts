@@ -333,12 +333,15 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     if (!account) throw new Error(`Token account ${address} was not found`);
     const data = Buffer.from(account.data);
     const currentAmount = data.readBigUInt64LE(64);
-    const controlledLamports = BigInt(account.lamports) + amount - currentAmount;
+    const controlledLamports =
+      BigInt(account.lamports) + amount - currentAmount;
     if (
       controlledLamports < 0n ||
       controlledLamports > BigInt(Number.MAX_SAFE_INTEGER)
     ) {
-      throw new Error("Controlled native token account lamports are out of range");
+      throw new Error(
+        "Controlled native token account lamports are out of range",
+      );
     }
     data.writeBigUInt64LE(amount, 64);
     surfnet.setAccount(
@@ -552,8 +555,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     ).not.to.equal(undefined);
     const selectedAmount = BigInt(
       String(
-        (selectedEvent?.data as { actualWsolAmountIn: BN })
-          .actualWsolAmountIn,
+        (selectedEvent?.data as { actualWsolAmountIn: BN }).actualWsolAmountIn,
       ),
     );
     expect(selectedAmount >= BigInt(minAmount.toString())).to.equal(true);
@@ -1145,7 +1147,10 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     const currentAmount = quoteVault.data.readBigUInt64LE(64);
     await setTokenAccountAmount(fixture.pumpQuoteVault, currentAmount * 4n);
 
-    const result = await executeBestDirectionDynamic(fixture, METEORA_PROGRAM_ID);
+    const result = await executeBestDirectionDynamic(
+      fixture,
+      METEORA_PROGRAM_ID,
+    );
     console.log(
       `Surfpool dynamic reverse consumed ${result.computeUnits} CU, amount=${result.selectedAmount}, profit=${result.profit}`,
     );

@@ -79,6 +79,43 @@ This file records durable executor decisions. Deployment facts belong in
 - Verification: controlled public-state forward and reverse dynamic executions
   consumed 219,961 CU and 215,963 CU respectively under a 300,000-CU limit.
 
+## ADR-005: Enforce the dynamic minimum after coverage capping
+
+- Status: accepted
+- Date: 2026-09-26
+- Decision: a direction whose largest completely quotable WSOL input is below
+  `min_wsol_amount_in` is incomplete and contributes no candidate. Every
+  evaluated and selected amount must remain inside the caller's inclusive
+  minimum and balance-capped maximum.
+- Decision: keep the existing `BestDirectionQuoteIncomplete` ABI error. Emit
+  one compact failure-only diagnostic containing each direction's curve stop
+  code, largest complete amount and visited-Bin count so account coverage,
+  traversal limits and empty liquidity can be distinguished during controlled
+  validation without logging every Bin.
+- Rationale: coverage capping must preserve a smaller legal candidate, but it
+  must never silently turn the configured minimum into a suggestion. The prior
+  candidate list admitted a non-zero coverage boundary below the minimum.
+- Consequence: no fixed instruction, account layout, discriminator or public
+  error code changes. Searcher coverage policy remains independent and the
+  Program remains the execution-time amount and quote authority.
+
+## ADR-006: Preserve exact boundary candidates with monotonic inversion
+
+- Status: accepted
+- Date: 2026-09-26
+- Decision: retain the same conservative Pump inverse-quote rounding window,
+  but find its first satisfying input by monotonic binary search. Reuse each
+  forward segment's already-computed end input as the next segment's start.
+- Rationale: linearly replaying a full Pump quote for every lamport in the
+  rounding window, twice for adjacent segment boundaries, consumed enough CU
+  for an active Token-2022 fixture to exhaust even 350,000 CU. Pump output is
+  monotonic in quote input, so binary search preserves the exact minimum input
+  and all existing boundary/interior candidates without reducing coverage.
+- Verification: the same isolated dynamic-forward fixture failed at both
+  300,000 and 350,000 CU before this change, then completed at 298,860 CU.
+  Dynamic reverse completed at 260,051 CU; fixed forward/reverse completed at
+  181,724 and 169,910 CU. All retained the 300,000-CU production target.
+
 ## Decision update rule
 
 When a decision changes, mark the old entry as superseded and add a replacement.

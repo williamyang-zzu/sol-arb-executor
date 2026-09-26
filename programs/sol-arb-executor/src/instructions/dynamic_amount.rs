@@ -84,6 +84,28 @@ struct DlmmCurve {
     segments: [DlmmSegment; MAX_QUOTE_VISITED_BINS_PER_DIRECTION],
     len: usize,
     visited_bins: u8,
+    stop_reason: CurveStopReason,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CurveStopReason {
+    InputLimitReached,
+    MissingBinArray,
+    BinArrayLimitReached,
+    VisitedBinLimitReached,
+    NoUsableLiquidity,
+}
+
+impl CurveStopReason {
+    const fn code(self) -> u8 {
+        match self {
+            Self::InputLimitReached => 0,
+            Self::MissingBinArray => 1,
+            Self::BinArrayLimitReached => 2,
+            Self::VisitedBinLimitReached => 3,
+            Self::NoUsableLiquidity => 4,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -99,12 +121,14 @@ impl DlmmCurve {
             segments: [DlmmSegment::EMPTY; MAX_QUOTE_VISITED_BINS_PER_DIRECTION],
             len: 0,
             visited_bins: 0,
+            stop_reason: CurveStopReason::VisitedBinLimitReached,
         }
     }
 
     fn clear(&mut self) {
         self.len = 0;
         self.visited_bins = 0;
+        self.stop_reason = CurveStopReason::VisitedBinLimitReached;
     }
 
     fn push(&mut self, segment: DlmmSegment) -> Result<()> {
@@ -191,6 +215,7 @@ struct DirectionSearch {
     boundary_candidates: u8,
     interior_candidates: u8,
     visited_bins: u8,
+    curve_stop_reason: CurveStopReason,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -208,6 +233,17 @@ struct DynamicSearchBounds {
     min_amount: u64,
     max_amount: u64,
     min_profit: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CandidateEvaluationContext {
+    min_amount: u64,
+    min_profit: u64,
+    largest_complete_amount: u64,
+    visited_bins: u8,
+    boundary_candidates: u8,
+    interior_candidates: u8,
+    curve_stop_reason: CurveStopReason,
 }
 
 #[derive(Clone, Debug)]
@@ -262,6 +298,11 @@ pub fn handler<'info>(
         args.min_profit_lamports,
         timestamp,
     )?;
+    require!(
+        selection.choice.amount_in >= args.min_wsol_amount_in
+            && selection.choice.amount_in <= balance_limited_max,
+        ArbError::InvalidDynamicAmountRange
+    );
     let selected_bin_arrays = best_direction::ordered_bin_arrays(
         ctx.remaining_accounts,
         &selection.choice.used_indices[..selection.choice.used_len],
@@ -368,13 +409,22 @@ fn select_dynamic(
             boundary_candidates: 0,
             interior_candidates: 0,
             visited_bins: 0,
+            curve_stop_reason: CurveStopReason::NoUsableLiquidity,
         }
     };
 
-    require!(
-        forward.complete_seen || reverse.complete_seen,
-        ArbError::BestDirectionQuoteIncomplete
-    );
+    if !forward.complete_seen && !reverse.complete_seen {
+        msg!(
+            "dynamic_quote_incomplete forward_stop={} forward_cap={} forward_bins={} reverse_stop={} reverse_cap={} reverse_bins={}",
+            forward.curve_stop_reason.code(),
+            forward.largest_complete_amount,
+            forward.visited_bins,
+            reverse.curve_stop_reason.code(),
+            reverse.largest_complete_amount,
+            reverse.visited_bins,
+        );
+        return err!(ArbError::BestDirectionQuoteIncomplete);
+    }
     let (direction, selected) = match (forward.best, reverse.best) {
         (Some(forward_choice), Some(reverse_choice)) => {
             if better_choice(reverse_choice, forward_choice) {
@@ -534,6 +584,7 @@ fn build_curve(
     let mut used_indices = [0_i64; MAX_QUOTE_BIN_ARRAYS_PER_DIRECTION];
     let mut used_len = 0_usize;
     let mut visited_bins = 0_u8;
+    let mut stop_reason = CurveStopReason::VisitedBinLimitReached;
 
     for _ in 0..MAX_QUOTE_VISITED_BINS_PER_DIRECTION {
         visited_bins = visited_bins.saturating_add(1);
@@ -558,10 +609,12 @@ fn build_curve(
                 .and_then(|data| parse_bin_array_index(&data).ok())
                 == Some(array_index)
         }) else {
+            stop_reason = CurveStopReason::MissingBinArray;
             break;
         };
         if used_len == 0 || used_indices[used_len - 1] != array_index {
             if used_len == MAX_QUOTE_BIN_ARRAYS_PER_DIRECTION {
+                stop_reason = CurveStopReason::BinArrayLimitReached;
                 break;
             }
             used_indices[used_len] = array_index;
@@ -606,6 +659,7 @@ fn build_curve(
                 total_in = input_end;
                 total_out = output_end;
                 if total_in >= input_limit {
+                    stop_reason = CurveStopReason::InputLimitReached;
                     break;
                 }
             }
@@ -615,6 +669,12 @@ fn build_curve(
         active_id = next_bin(active_id, swap_for_y);
     }
     curve.visited_bins = visited_bins;
+    curve.stop_reason =
+        if curve.as_slice().is_empty() && stop_reason == CurveStopReason::VisitedBinLimitReached {
+            CurveStopReason::NoUsableLiquidity
+        } else {
+            stop_reason
+        };
     Ok(())
 }
 
@@ -626,14 +686,20 @@ fn search_forward(
     min_profit: u64,
 ) -> DirectionSearch {
     let largest_complete_amount = largest_forward_complete_amount(market, curve, max_amount);
+    if largest_complete_amount < min_amount {
+        return incomplete_direction(curve, largest_complete_amount);
+    }
     let mut candidates = CandidateAmounts::new();
     candidates.push_unique(min_amount);
     candidates.push_unique(largest_complete_amount);
     let mut boundary_candidates = 0_u8;
     let mut interior_candidates = 0_u8;
+    let mut previous_segment_end_input = None;
     for segment in curve.as_slice() {
         let segment_start = if segment.input_start == 0 {
             1
+        } else if let Some(value) = previous_segment_end_input {
+            value
         } else if let Some(value) = pump_input_for_target_out(market, segment.input_start) {
             value
         } else {
@@ -642,6 +708,7 @@ fn search_forward(
         let Some(segment_end) = pump_input_for_target_out(market, segment.input_end) else {
             continue;
         };
+        previous_segment_end_input = Some(segment_end);
         if segment_end < min_amount || segment_start > largest_complete_amount {
             continue;
         }
@@ -665,11 +732,15 @@ fn search_forward(
     }
     evaluate_candidates(
         candidates.as_slice(),
-        min_profit,
-        largest_complete_amount,
-        curve.visited_bins,
-        boundary_candidates,
-        interior_candidates,
+        CandidateEvaluationContext {
+            min_amount,
+            min_profit,
+            largest_complete_amount,
+            visited_bins: curve.visited_bins,
+            boundary_candidates,
+            interior_candidates,
+            curve_stop_reason: curve.stop_reason,
+        },
         |amount| evaluate_forward(market, curve, amount),
     )
 }
@@ -682,6 +753,9 @@ fn search_reverse(
     min_profit: u64,
 ) -> DirectionSearch {
     let largest_complete_amount = max_amount.min(curve.largest_complete_input());
+    if largest_complete_amount < min_amount {
+        return incomplete_direction(curve, largest_complete_amount);
+    }
     let mut candidates = CandidateAmounts::new();
     candidates.push_unique(min_amount);
     candidates.push_unique(largest_complete_amount);
@@ -709,22 +783,22 @@ fn search_reverse(
     }
     evaluate_candidates(
         candidates.as_slice(),
-        min_profit,
-        largest_complete_amount,
-        curve.visited_bins,
-        boundary_candidates,
-        interior_candidates,
+        CandidateEvaluationContext {
+            min_amount,
+            min_profit,
+            largest_complete_amount,
+            visited_bins: curve.visited_bins,
+            boundary_candidates,
+            interior_candidates,
+            curve_stop_reason: curve.stop_reason,
+        },
         |amount| evaluate_reverse(market, curve, amount),
     )
 }
 
 fn evaluate_candidates<F>(
     candidates: &[u64],
-    min_profit: u64,
-    largest_complete_amount: u64,
-    visited_bins: u8,
-    boundary_candidates: u8,
-    interior_candidates: u8,
+    context: CandidateEvaluationContext,
     mut evaluate: F,
 ) -> DirectionSearch
 where
@@ -732,7 +806,9 @@ where
 {
     let mut best = None;
     let mut complete_seen = false;
-    for amount_in in candidates.iter().copied().filter(|amount| *amount > 0) {
+    for amount_in in candidates.iter().copied().filter(|amount| {
+        *amount >= context.min_amount && *amount <= context.largest_complete_amount
+    }) {
         let Ok(quote) = evaluate(amount_in) else {
             continue;
         };
@@ -740,7 +816,7 @@ where
         let Some(profit) = quote.amount_out.checked_sub(amount_in) else {
             continue;
         };
-        if profit < min_profit {
+        if profit < context.min_profit {
             continue;
         }
         let candidate = DirectionChoice {
@@ -757,10 +833,23 @@ where
     DirectionSearch {
         best,
         complete_seen,
+        largest_complete_amount: context.largest_complete_amount,
+        boundary_candidates: context.boundary_candidates,
+        interior_candidates: context.interior_candidates,
+        visited_bins: context.visited_bins,
+        curve_stop_reason: context.curve_stop_reason,
+    }
+}
+
+fn incomplete_direction(curve: &DlmmCurve, largest_complete_amount: u64) -> DirectionSearch {
+    DirectionSearch {
+        best: None,
+        complete_seen: false,
         largest_complete_amount,
-        boundary_candidates,
-        interior_candidates,
-        visited_bins,
+        boundary_candidates: 0,
+        interior_candidates: 0,
+        visited_bins: curve.visited_bins,
+        curve_stop_reason: curve.stop_reason,
     }
 }
 
@@ -854,14 +943,22 @@ fn pump_input_for_target_out(market: &MarketState, target_out: u64) -> Option<u6
         )?)?;
     }
     let seed: u64 = gross.try_into().ok()?;
-    let low = seed.saturating_sub(16).max(1);
-    let high = seed.saturating_add(16);
-    (low..=high).find(|candidate| {
-        pump_buy_amount_out(market, *candidate).is_some_and(|output| output >= target_out)
-            && candidate.checked_sub(1).is_none_or(|previous| {
-                pump_buy_amount_out(market, previous).is_none_or(|output| output < target_out)
-            })
-    })
+    // Pump output is monotonic. Keep the same conservative rounding window as
+    // the previous exact scan, but locate its first satisfying input with a
+    // bounded binary search instead of replaying up to 33 full Pump quotes.
+    let mut low = seed.saturating_sub(16).max(1);
+    let mut high = seed.saturating_add(16);
+    while low < high {
+        let midpoint = low + (high - low) / 2;
+        if pump_buy_amount_out(market, midpoint).is_some_and(|output| output >= target_out) {
+            high = midpoint;
+        } else {
+            low = midpoint.saturating_add(1);
+        }
+    }
+    pump_buy_amount_out(market, low)
+        .is_some_and(|output| output >= target_out)
+        .then_some(low)
 }
 
 fn pump_buy_amount_out(market: &MarketState, amount_in: u64) -> Option<u64> {
@@ -1136,6 +1233,22 @@ mod tests {
         }
     }
 
+    fn evaluation_context(
+        min_amount: u64,
+        min_profit: u64,
+        largest_complete_amount: u64,
+    ) -> CandidateEvaluationContext {
+        CandidateEvaluationContext {
+            min_amount,
+            min_profit,
+            largest_complete_amount,
+            visited_bins: 1,
+            boundary_candidates: 0,
+            interior_candidates: 0,
+            curve_stop_reason: CurveStopReason::InputLimitReached,
+        }
+    }
+
     #[test]
     fn validates_dynamic_range() {
         assert!(validate_args(&BestDirectionDynamicArgs {
@@ -1179,7 +1292,10 @@ mod tests {
     #[test]
     fn candidate_selection_uses_absolute_profit_then_lower_input() {
         let candidates = [5, 10, 20];
-        let search = evaluate_candidates(&candidates, 1, 20, 1, 2, 1, |amount| {
+        let mut context = evaluation_context(5, 1, 20);
+        context.boundary_candidates = 2;
+        context.interior_candidates = 1;
+        let search = evaluate_candidates(&candidates, context, |amount| {
             Ok(CurveQuote {
                 amount_out: match amount {
                     5 => 7,
@@ -1197,7 +1313,10 @@ mod tests {
     #[test]
     fn incomplete_larger_candidate_keeps_smaller_complete_choice() {
         let candidates = [5, 10, 20];
-        let search = evaluate_candidates(&candidates, 1, 10, 1, 1, 0, |amount| {
+        let mut context = evaluation_context(5, 1, 10);
+        context.boundary_candidates = 1;
+        context.curve_stop_reason = CurveStopReason::MissingBinArray;
+        let search = evaluate_candidates(&candidates, context, |amount| {
             if amount > 10 {
                 Err(QuoteError::InsufficientLiquidity)
             } else {
@@ -1213,6 +1332,50 @@ mod tests {
     }
 
     #[test]
+    fn candidate_evaluation_never_selects_below_configured_minimum() {
+        let candidates = [4, 5, 10];
+        let search = evaluate_candidates(&candidates, evaluation_context(5, 1, 10), |amount| {
+            Ok(CurveQuote {
+                amount_out: amount + 2,
+                used_indices: [0, 0],
+                used_len: 1,
+            })
+        });
+        assert!(search.complete_seen);
+        assert_eq!(search.best.unwrap().amount_in, 5);
+    }
+
+    #[test]
+    fn reverse_coverage_below_minimum_is_incomplete() {
+        let market = market();
+        let mut curve = DlmmCurve::new();
+        curve.push(segment(0, 4, 0, 8)).unwrap();
+        curve.visited_bins = 1;
+        curve.stop_reason = CurveStopReason::MissingBinArray;
+
+        let search = search_reverse(&market, &curve, 5, 25, 1);
+
+        assert!(!search.complete_seen);
+        assert!(search.best.is_none());
+        assert_eq!(search.largest_complete_amount, 4);
+        assert_eq!(search.curve_stop_reason, CurveStopReason::MissingBinArray);
+    }
+
+    #[test]
+    fn reverse_coverage_equal_to_minimum_remains_eligible() {
+        let market = market();
+        let mut curve = DlmmCurve::new();
+        curve.push(segment(0, 5, 0, 10)).unwrap();
+        curve.visited_bins = 1;
+        curve.stop_reason = CurveStopReason::MissingBinArray;
+
+        let search = search_reverse(&market, &curve, 5, 25, 1);
+
+        assert!(search.complete_seen);
+        assert_eq!(search.largest_complete_amount, 5);
+    }
+
+    #[test]
     fn curve_quotes_inside_a_segment_without_replaying_prior_bins() {
         let mut curve = DlmmCurve::new();
         curve.push(segment(0, 1_000, 0, 1_000)).unwrap();
@@ -1224,10 +1387,13 @@ mod tests {
     #[test]
     fn pump_boundary_inverse_round_trips() {
         let market = market();
-        let target = 5_000_000;
-        let input = pump_input_for_target_out(&market, target).unwrap();
-        assert!(pump_buy_amount_out(&market, input).unwrap() >= target);
-        assert!(pump_buy_amount_out(&market, input - 1).unwrap() < target);
+        for target in [1_u64, 10, 1_000, 5_000_000, 100_000_000, 10_000_000_000] {
+            let input = pump_input_for_target_out(&market, target).unwrap();
+            assert!(pump_buy_amount_out(&market, input).unwrap() >= target);
+            if input > 1 {
+                assert!(pump_buy_amount_out(&market, input - 1).unwrap() < target);
+            }
+        }
     }
 
     #[test]
@@ -1240,5 +1406,37 @@ mod tests {
         assert!(largest > 0 && largest < 1_000_000);
         assert!(pump_buy_amount_out(&market, largest).unwrap() <= 5_000_000);
         assert!(pump_buy_amount_out(&market, largest + 1).unwrap() > 5_000_000);
+    }
+
+    #[test]
+    fn forward_coverage_below_minimum_is_incomplete() {
+        let market = market();
+        let mut curve = DlmmCurve::new();
+        curve.push(segment(0, 5_000_000, 0, 5_000_000)).unwrap();
+        curve.visited_bins = 1;
+        curve.stop_reason = CurveStopReason::MissingBinArray;
+        let largest = largest_forward_complete_amount(&market, &curve, 1_000_000);
+
+        let search = search_forward(&market, &curve, largest + 1, 1_000_000, 1);
+
+        assert!(!search.complete_seen);
+        assert!(search.best.is_none());
+        assert_eq!(search.largest_complete_amount, largest);
+        assert_eq!(search.curve_stop_reason, CurveStopReason::MissingBinArray);
+    }
+
+    #[test]
+    fn forward_coverage_equal_to_minimum_remains_eligible() {
+        let market = market();
+        let mut curve = DlmmCurve::new();
+        curve.push(segment(0, 5_000_000, 0, 5_000_000)).unwrap();
+        curve.visited_bins = 1;
+        curve.stop_reason = CurveStopReason::MissingBinArray;
+        let largest = largest_forward_complete_amount(&market, &curve, 1_000_000);
+
+        let search = search_forward(&market, &curve, largest, 1_000_000, 1);
+
+        assert!(search.complete_seen);
+        assert_eq!(search.largest_complete_amount, largest);
     }
 }

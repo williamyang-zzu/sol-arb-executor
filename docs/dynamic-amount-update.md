@@ -16,7 +16,11 @@ Implemented components:
   frame for each direction;
 - candidate generation at range endpoints, Bin boundaries, and analytic
   within-segment estimates;
+- reuse of adjacent forward segment boundaries plus bounded monotonic binary
+  search inside the existing rounding window, avoiding repeated Pump quote
+  replays without changing candidate semantics;
 - complete-coverage fallback when the requested maximum is too large;
+- strict rejection of per-direction coverage below the configured minimum;
 - balance-capped maximum input;
 - production quote revalidation and deterministic tie-breaking;
 - reuse of existing Pump/Meteora execution and post-trade safety checks;
@@ -24,6 +28,21 @@ Implemented components:
   diagnostics, including whether a future proof-safe early stop was used (V1
   always reports `false` and completes the bounded traversal);
 - instruction serialization, unit, TypeScript, and isolated integration tests.
+
+When neither direction can completely quote the configured minimum, the
+instruction retains the existing `BestDirectionQuoteIncomplete` ABI error and
+emits one compact diagnostic line. Its numeric stop codes are:
+
+```text
+0 = configured directional input limit reached
+1 = required runtime BinArray account missing
+2 = per-direction BinArray traversal limit reached
+3 = visited-Bin traversal limit reached
+4 = no usable liquidity segment observed
+```
+
+The diagnostic is emitted only on the final failure path. It does not add a
+per-Bin production log or move quote authority off-chain.
 
 ## Compatibility
 
@@ -38,9 +57,9 @@ The existing per-direction limits of two BinArrays and 16 visited bins remain.
 ## Verification boundary
 
 Local unit, ABI-construction, build, lint, and TypeScript results are recorded in
-the change handoff. Controlled public-state Surfpool executions selected bounded
-amounts in both directions and completed at 219,961 CU (Pump to Meteora) and
-215,963 CU (Meteora to Pump), below the 300,000-CU acceptance target. The
-repository-owned Searcher-to-Executor harness independently completed at
-218,263 CU and 214,248 CU. No entry in this document asserts a mainnet deployment
+the change handoff. The hash-pinned repository-owned Searcher-to-Executor
+Surfpool harness selected bounded amounts and completed an active Token-2022
+fixture at 298,860 CU (Pump to Meteora) and 260,051 CU (Meteora to Pump), below
+the 300,000-CU acceptance target. Fixed forward/reverse regressions completed at
+181,724 and 169,910 CU. No entry in this document asserts a mainnet deployment
 or profitable production result.
