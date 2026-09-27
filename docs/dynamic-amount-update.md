@@ -16,9 +16,9 @@ Implemented components:
   frame for each direction;
 - candidate generation at range endpoints, Bin boundaries, and analytic
   within-segment estimates;
-- reuse of adjacent forward segment boundaries plus bounded monotonic binary
-  search inside the existing rounding window, avoiding repeated Pump quote
-  replays without changing candidate semantics;
+- conservative closed-form Pump inversion for forward segment boundaries,
+  followed by one exact production quote validation instead of a per-boundary
+  binary search; the single coverage-cap binary search remains;
 - complete-coverage fallback when the requested maximum is too large;
 - strict rejection of per-direction coverage below the configured minimum;
 - balance-capped maximum input;
@@ -58,8 +58,9 @@ The existing per-direction limits of two BinArrays and 16 visited bins remain.
 
 Local unit, ABI-construction, build, lint, and TypeScript results are recorded in
 the change handoff. The hash-pinned repository-owned Searcher-to-Executor
-Surfpool harness selected bounded amounts and completed an active Token-2022
-fixture at 298,860 CU (Pump to Meteora) and 260,051 CU (Meteora to Pump), below
-the 300,000-CU acceptance target. Fixed forward/reverse regressions completed at
-181,724 and 169,910 CU. No entry in this document asserts a mainnet deployment
-or profitable production result.
+Surfpool harness selected bounded amounts and completed the A13 Token-2022
+fixture at 281,858 CU (Pump to Meteora) and 250,867 CU (Meteora to Pump), below
+the 300,000-CU acceptance target. A denser DD3A pressure fixture improved to
+575,138/366,230 CU but still exceeded the reviewed 350,000-CU ceiling. Dynamic
+sizing therefore retains an open multi-pool CU release gate. No entry in this
+document asserts a mainnet deployment or profitable production result.

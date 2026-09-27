@@ -700,12 +700,12 @@ fn search_forward(
             1
         } else if let Some(value) = previous_segment_end_input {
             value
-        } else if let Some(value) = pump_input_for_target_out(market, segment.input_start) {
+        } else if let Some(value) = pump_input_at_or_below_target_out(market, segment.input_start) {
             value
         } else {
             continue;
         };
-        let Some(segment_end) = pump_input_for_target_out(market, segment.input_end) else {
+        let Some(segment_end) = pump_input_at_or_below_target_out(market, segment.input_end) else {
             continue;
         };
         previous_segment_end_input = Some(segment_end);
@@ -920,45 +920,36 @@ fn largest_forward_complete_amount(
     lower
 }
 
-fn pump_input_for_target_out(market: &MarketState, target_out: u64) -> Option<u64> {
+fn pump_input_at_or_below_target_out(market: &MarketState, target_out: u64) -> Option<u64> {
     if target_out == 0 || target_out >= market.pump_base_reserve {
         return None;
     }
     let effective_quote_reserve = u128::from(market.pump_quote_reserve)
         .checked_add(u128::from(market.pump_virtual_quote_reserve))?;
-    let curve_input = div_ceil(
+    let boundary_curve_input = div_ceil(
         u128::from(target_out).checked_mul(effective_quote_reserve)?,
         u128::from(market.pump_base_reserve.checked_sub(target_out)?),
     )?;
-    let effective_quote = curve_input.checked_add(1)?;
-    let mut gross = effective_quote;
-    for bps in [
-        market.pump_fees.lp_fee_bps,
-        market.pump_fees.protocol_fee_bps,
-        market.pump_fees.creator_fee_bps,
-    ] {
-        gross = gross.checked_add(div_ceil(
-            effective_quote.checked_mul(u128::from(bps))?,
-            PUMP_FEE_DENOMINATOR,
-        )?)?;
+    let total_fee_bps = u128::from(pump_total_fee_bps(market)?);
+
+    // `boundary_curve_input` is the first constant-product curve input that
+    // can produce `target_out`. Pump subtracts one from its post-fee effective
+    // quote before applying the curve. By targeting an effective quote no
+    // greater than `boundary_curve_input`, this closed-form gross input stays
+    // immediately below the DLMM segment boundary even after Pump's fee
+    // rounding. Candidate evaluation later performs the exact Pump quote, so
+    // this approximation changes only boundary sampling, never execution or
+    // profit safety.
+    let gross = boundary_curve_input
+        .checked_mul(PUMP_FEE_DENOMINATOR.checked_add(total_fee_bps)?)?
+        / PUMP_FEE_DENOMINATOR;
+    let candidate: u64 = gross.try_into().ok()?;
+    if candidate == 0 {
+        return None;
     }
-    let seed: u64 = gross.try_into().ok()?;
-    // Pump output is monotonic. Keep the same conservative rounding window as
-    // the previous exact scan, but locate its first satisfying input with a
-    // bounded binary search instead of replaying up to 33 full Pump quotes.
-    let mut low = seed.saturating_sub(16).max(1);
-    let mut high = seed.saturating_add(16);
-    while low < high {
-        let midpoint = low + (high - low) / 2;
-        if pump_buy_amount_out(market, midpoint).is_some_and(|output| output >= target_out) {
-            high = midpoint;
-        } else {
-            low = midpoint.saturating_add(1);
-        }
-    }
-    pump_buy_amount_out(market, low)
-        .is_some_and(|output| output >= target_out)
-        .then_some(low)
+    pump_buy_amount_out(market, candidate)
+        .is_some_and(|output| output < target_out)
+        .then_some(candidate)
 }
 
 fn pump_buy_amount_out(market: &MarketState, amount_in: u64) -> Option<u64> {
@@ -1249,6 +1240,23 @@ mod tests {
         }
     }
 
+    fn exact_pump_input_for_target_out(market: &MarketState, target_out: u64) -> u64 {
+        let mut low = 1_u64;
+        let mut high = 1_u64;
+        while pump_buy_amount_out(market, high).is_none_or(|output| output < target_out) {
+            high = high.checked_mul(2).unwrap();
+        }
+        while low < high {
+            let midpoint = low + (high - low) / 2;
+            if pump_buy_amount_out(market, midpoint).is_some_and(|output| output >= target_out) {
+                high = midpoint;
+            } else {
+                low = midpoint + 1;
+            }
+        }
+        low
+    }
+
     #[test]
     fn validates_dynamic_range() {
         assert!(validate_args(&BestDirectionDynamicArgs {
@@ -1385,13 +1393,41 @@ mod tests {
     }
 
     #[test]
-    fn pump_boundary_inverse_round_trips() {
+    fn conservative_pump_boundary_stays_below_exact_transition() {
         let market = market();
-        for target in [1_u64, 10, 1_000, 5_000_000, 100_000_000, 10_000_000_000] {
-            let input = pump_input_for_target_out(&market, target).unwrap();
-            assert!(pump_buy_amount_out(&market, input).unwrap() >= target);
-            if input > 1 {
-                assert!(pump_buy_amount_out(&market, input - 1).unwrap() < target);
+        for target in [1_000_u64, 5_000_000, 100_000_000, 10_000_000_000] {
+            let conservative = pump_input_at_or_below_target_out(&market, target).unwrap();
+            let exact = exact_pump_input_for_target_out(&market, target);
+            assert!(pump_buy_amount_out(&market, conservative).unwrap() < target);
+            assert!(conservative < exact);
+            assert!(exact - conservative <= 8);
+        }
+    }
+
+    #[test]
+    fn conservative_pump_boundary_handles_reserve_and_fee_variants() {
+        for (base, quote, virtual_quote) in [
+            (800_000_000_000, 20_000_000_000, 1_000_000_000),
+            (1_000_000_000_000, 10_000_000_000, 0),
+            (10_000_000_000_000, 500_000_000_000, 50_000_000_000),
+        ] {
+            for (lp, protocol, creator) in [(0, 0, 0), (20, 5, 5), (100, 50, 50)] {
+                let mut market = market();
+                market.pump_base_reserve = base;
+                market.pump_quote_reserve = quote;
+                market.pump_virtual_quote_reserve = virtual_quote;
+                market.pump_fees = PumpFees {
+                    lp_fee_bps: lp,
+                    protocol_fee_bps: protocol,
+                    creator_fee_bps: creator,
+                };
+                for target in [base / 1_000_000, base / 10_000, base / 100, base / 4] {
+                    let conservative = pump_input_at_or_below_target_out(&market, target).unwrap();
+                    let exact = exact_pump_input_for_target_out(&market, target);
+                    assert!(pump_buy_amount_out(&market, conservative).unwrap() < target);
+                    assert!(conservative < exact);
+                    assert!(exact - conservative <= 8);
+                }
             }
         }
     }

@@ -101,7 +101,7 @@ This file records durable executor decisions. Deployment facts belong in
 
 ## ADR-006: Preserve exact boundary candidates with monotonic inversion
 
-- Status: accepted
+- Status: superseded by ADR-007
 - Date: 2026-09-26
 - Decision: retain the same conservative Pump inverse-quote rounding window,
   but find its first satisfying input by monotonic binary search. Reuse each
@@ -115,6 +115,33 @@ This file records durable executor decisions. Deployment facts belong in
   300,000 and 350,000 CU before this change, then completed at 298,860 CU.
   Dynamic reverse completed at 260,051 CU; fixed forward/reverse completed at
   181,724 and 169,910 CU. All retained the 300,000-CU production target.
+
+## ADR-007: Sample Pump boundaries conservatively without per-boundary search
+
+- Status: accepted; multi-pool CU release gate remains open
+- Date: 2026-09-27
+- Decision: map each forward DLMM Token boundary to a closed-form Pump WSOL
+  input that is provably below the first crossing input after fee rounding.
+  Validate that sample with one production Pump quote and keep exact integer
+  re-quotation for every admitted candidate. Do not replay a binary search for
+  every Bin boundary.
+- Decision: retain the single monotonic search that caps the direction's
+  largest completely covered input. It is coverage-critical and runs once per
+  direction rather than once per segment.
+- Rationale: exact per-boundary inversion repeated Pump quotes for every usable
+  DLMM segment. Boundary sampling does not need exact inversion because the
+  optimizer is already bounded/approximate and every candidate, CPI minimum
+  output and final profit condition remain exact. Sampling immediately below
+  the boundary also cannot extend beyond the supplied DLMM coverage.
+- Consequence: a boundary candidate may be a few lamports below the exact first
+  crossing input. Unit vectors across multiple reserves and fee schedules keep
+  the gap within eight lamports. This can trade negligible boundary precision
+  for bounded CU without weakening execution or profit safety.
+- Verification: on the A13 controlled route, dynamic forward/reverse fell from
+  298,649/260,708 CU to 281,858/250,867 CU. On a denser DD3A pressure route,
+  they fell from 698,977/387,108 CU to 575,138/366,230 CU. The latter remains
+  above even the reviewed 350,000-CU ceiling, so this decision is retained as
+  a useful optimization but does not close the multi-pool production gate.
 
 ## Decision update rule
 
