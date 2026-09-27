@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "programId": "RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51",
+  "executionMode": "pre-dynamic-fixed-amount",
+  "evidenceLevel": "signature-only",
+  "purpose": "Historical successful mainnet transactions retained as inputs for fixed-versus-dynamic amount parity and replay research.",
+  "verification": {
+    "checkedAt": "2026-09-27",
+    "transactionCount": 7,
+    "allSucceeded": true,
+    "allInvokedProgram": true,
+    "instruction": "execute_best_direction",
+    "historicalPrestateCaptured": false
+  },
+  "successSignatures": [
+    "23dUPBYxhn8hB8iJgBJQtQgRqJLnM1TPffXwjYDGZmMN6F5TWJktKX1GuBtNKCxfsMMufuD7jBjGqDBnrAszaMRC",
+    "2CJrGgZWLn2Tgg3raBN6stUzvf2zcQwCeUNeBeNA6gjeKDM6V52VuowPW8QCqR65SniLKQDFeZKtFTyAc4t1DCiw",
+    "4Cq4dF8sY7UcxYpM3WiWCFqqoBeiLa5ebxiQqS7GTbv7rrBK8SGmyFnr3P9NqwGeBWFgo7odK6cATRJPmDALqSrW",
+    "oY2RC1ash1gnY36RbVAicE26y1nXUPrQNE7sHpYpByWzZkaWofQwaG2zLuBnKjuDVyeara1tZpmQ1rapRxDVUUW",
+    "3Po6gRtX5cnTp5r8YkEWNiYKhadczetSymCScpssHb6NLvpvzurHvmdJhzbcGxN3ifCfnxdfaJ9k9Cjs84rwaKEe",
+    "35QDvww8WTNMZsQniJG3oogorVadxTwgUEGHEVtvSF94nj4W8BgcN3L744qaUPYXEZ3RNgwZMzxqsnpVLfz5QRAn",
+    "4WDL8gzQSjz418oZqjR6eLUq4HFvqSBfRNUN42YMqPiJ5TxovTRqWe9S7ZiLjcKyk9HBDMRKtKYSovvSQvF5g81s"
+  ],
+  "replayStatus": "historical-prestate-not-captured",
+  "notes": [
+    "This corpus does not contain credentials, RPC endpoints, wallet paths, or private strategy parameters.",
+    "A transaction signature proves identity only; deterministic replay additionally requires transaction-boundary historical account state.",
+    "Do not substitute current pool account values or Surfpool timeTravelToSlot for the missing historical prestate."
+  ]
+}

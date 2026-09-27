@@ -61,6 +61,28 @@
 本条不公开 cashback 账户构造细节、测试资产、市场、执行方向、输入参数、候选评估方式或交易
 发送条件。交易签名仅用于独立验证主网执行事实。
 
+## 动态金额上线前：固定金额成功回归语料
+
+以下七笔主网成功交易来自动态金额模式引入前的一轮固定金额执行测试。这里仅固定公开交易签名，
+用于后续完成固定金额与动态金额的报价、方向选择和执行结果 parity 验证；不记录钱包路径、RPC、
+发送条件或其他私有运行配置。
+
+| 序号 | 交易 |
+| ---: | --- |
+| 1 | [23dUPBYx…rAszaMRC](https://solscan.io/tx/23dUPBYxhn8hB8iJgBJQtQgRqJLnM1TPffXwjYDGZmMN6F5TWJktKX1GuBtNKCxfsMMufuD7jBjGqDBnrAszaMRC) |
+| 2 | [2CJrGgZWL…4t1DCiw](https://solscan.io/tx/2CJrGgZWLn2Tgg3raBN6stUzvf2zcQwCeUNeBeNA6gjeKDM6V52VuowPW8QCqR65SniLKQDFeZKtFTyAc4t1DCiw) |
+| 3 | [4Cq4dF8sY…mDALqSrW](https://solscan.io/tx/4Cq4dF8sY7UcxYpM3WiWCFqqoBeiLa5ebxiQqS7GTbv7rrBK8SGmyFnr3P9NqwGeBWFgo7odK6cATRJPmDALqSrW) |
+| 4 | [oY2RC1ash…apRxDVUUW](https://solscan.io/tx/oY2RC1ash1gnY36RbVAicE26y1nXUPrQNE7sHpYpByWzZkaWofQwaG2zLuBnKjuDVyeara1tZpmQ1rapRxDVUUW) |
+| 5 | [3Po6gRtX5…s84rwaKEe](https://solscan.io/tx/3Po6gRtX5cnTp5r8YkEWNiYKhadczetSymCScpssHb6NLvpvzurHvmdJhzbcGxN3ifCfnxdfaJ9k9Cjs84rwaKEe) |
+| 6 | [35QDvww8W…VLfz5QRAn](https://solscan.io/tx/35QDvww8WTNMZsQniJG3oogorVadxTwgUEGHEVtvSF94nj4W8BgcN3L744qaUPYXEZ3RNgwZMzxqsnpVLfz5QRAn) |
+| 7 | [4WDL8gzQS…vSQvF5g81s](https://solscan.io/tx/4WDL8gzQSjz418oZqjR6eLUq4HFvqSBfRNUN42YMqPiJ5TxovTRqWe9S7ZiLjcKyk9HBDMRKtKYSovvSQvF5g81s) |
+
+机器可读清单位于
+[`tests/fixtures/pre-dynamic-fixed-amount-successes.json`](../tests/fixtures/pre-dynamic-fixed-amount-successes.json)。
+当前清单的证据等级为 `signature-only`：尚未提交每笔交易边界处的完整历史账户字节，因此不能把
+当前池状态或单纯修改 Surfpool slot 当作当时盈利状态的确定性回放。补齐历史 prestate 后，这七笔
+应作为动态金额发布门槛：固定金额成功时，动态模式的最小金额候选不得被遗漏。
+
 ### 计算口径
 
 毛利润直接取成功交易中交易者 WSOL Token Account 的链上余额变化：

@@ -59,3 +59,10 @@ must retain `getTransaction` history for the pinned slots. This evidence suite
 does not execute a new trade; the Surfpool suite above remains responsible for
 executing the locally built Program against real protocol accounts at their
 current remote state.
+
+Seven additional successful transactions from the pre-dynamic fixed-amount mode
+are retained in
+`tests/fixtures/pre-dynamic-fixed-amount-successes.json`. That corpus is
+currently signature-only: it is an input list for archive extraction and future
+fixed-versus-dynamic parity work, not a deterministic historical-state replay.
+It must not be hydrated with current pool account values.
