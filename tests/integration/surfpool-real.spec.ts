@@ -46,6 +46,11 @@ const EXECUTOR_PROGRAM_ID = new PublicKey(
 );
 const SUCCESS_PATH_CU_LIMIT = 300_000;
 const SUCCESS_PATH_CU_PRICE_MICRO_LAMPORTS = 300;
+const PARITY_FIXED_AMOUNT = new BN(5_000_000);
+const PARITY_MAX_AMOUNT = new BN(20_000_000);
+const PARITY_MIN_PROFIT = new BN(7_000);
+
+type ExecutionDirection = "pump-to-meteora" | "meteora-to-pump";
 
 function required(name: string): string {
   const value = process.env[name];
@@ -581,6 +586,153 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       profit: finalWsol - initialWsol,
       selectedAmount,
     };
+  }
+
+  async function simulateBestDirectionParity(
+    fixture: Awaited<ReturnType<typeof buildBestDirectionFixture>>,
+  ) {
+    const remainingAccounts = fixture.binArrays.map(({ publicKey }) => ({
+      pubkey: publicKey,
+      isSigner: false,
+      isWritable: true,
+    }));
+    const fixedInstruction = await program.methods
+      .executeBestDirection({
+        wsolAmountIn: PARITY_FIXED_AMOUNT,
+        minProfitLamports: PARITY_MIN_PROFIT,
+      })
+      .accounts(fixture.routeAccounts)
+      .remainingAccounts(remainingAccounts)
+      .instruction();
+    const exactDynamicInstruction = await program.methods
+      .executeBestDirectionDynamic({
+        minWsolAmountIn: PARITY_FIXED_AMOUNT,
+        maxWsolAmountIn: PARITY_FIXED_AMOUNT,
+        minProfitLamports: PARITY_MIN_PROFIT,
+      })
+      .accounts(fixture.routeAccounts)
+      .remainingAccounts(remainingAccounts)
+      .instruction();
+    const rangedDynamicInstruction = await program.methods
+      .executeBestDirectionDynamic({
+        minWsolAmountIn: PARITY_FIXED_AMOUNT,
+        maxWsolAmountIn: PARITY_MAX_AMOUNT,
+        minProfitLamports: PARITY_MIN_PROFIT,
+      })
+      .accounts(fixture.routeAccounts)
+      .remainingAccounts(remainingAccounts)
+      .instruction();
+    const lookupTable = await createLookupTable([
+      ...Object.values(fixture.routeAccounts),
+      ...fixture.binArrays.map(({ publicKey }) => publicKey),
+    ]);
+    const latest = await connection.getLatestBlockhash("processed");
+
+    async function simulate(
+      route: TransactionInstruction,
+      dynamic: boolean,
+    ): Promise<{
+      direction: ExecutionDirection;
+      profit: bigint;
+      computeUnits: number;
+      selectedAmount?: bigint;
+      expectedProfit?: bigint;
+      largestCompleteAmount?: bigint;
+    }> {
+      const message = new TransactionMessage({
+        payerKey: trader.publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions: [
+          ...computeBudgetInstructions(
+            SUCCESS_PATH_CU_LIMIT,
+            SUCCESS_PATH_CU_PRICE_MICRO_LAMPORTS,
+          ),
+          route,
+        ],
+      }).compileToV0Message([lookupTable]);
+      const transaction = new VersionedTransaction(message);
+      transaction.sign([trader]);
+      const response = await connection.simulateTransaction(transaction, {
+        commitment: "processed",
+        sigVerify: true,
+      });
+      const logs = response.value.logs ?? [];
+      expect(
+        response.value.err,
+        `simulation failed:\n${logs.join("\n")}`,
+      ).to.equal(null);
+      const pumpInvocation = logs.findIndex((line) =>
+        line.includes(`Program ${PUMP_AMM_PROGRAM_ID.toBase58()} invoke`),
+      );
+      const meteoraInvocation = logs.findIndex((line) =>
+        line.includes(`Program ${METEORA_PROGRAM_ID.toBase58()} invoke`),
+      );
+      expect(pumpInvocation).to.be.greaterThan(-1);
+      expect(meteoraInvocation).to.be.greaterThan(-1);
+      const direction: ExecutionDirection =
+        pumpInvocation < meteoraInvocation
+          ? "pump-to-meteora"
+          : "meteora-to-pump";
+      const decodedEvents = logs
+        .filter((line) => line.startsWith("Program data: "))
+        .map((line) => program.coder.events.decode(line.slice(14)))
+        .filter((event) => event !== null);
+      const routeCompleted = decodedEvents.find(
+        (event) => event?.name === "routeCompleted",
+      );
+      expect(routeCompleted, "RouteCompleted event is missing").not.to.equal(
+        undefined,
+      );
+      const completedData = routeCompleted!.data as {
+        initialWsolBalance: BN;
+        finalWsolBalance: BN;
+      };
+      const profit =
+        BigInt(String(completedData.finalWsolBalance)) -
+        BigInt(String(completedData.initialWsolBalance));
+      const result: {
+        direction: ExecutionDirection;
+        profit: bigint;
+        computeUnits: number;
+        selectedAmount?: bigint;
+        expectedProfit?: bigint;
+        largestCompleteAmount?: bigint;
+      } = {
+        direction,
+        profit,
+        computeUnits: Number(response.value.unitsConsumed ?? 0),
+      };
+      if (dynamic) {
+        const selected = decodedEvents.find(
+          (event) => event?.name === "dynamicAmountSelected",
+        );
+        expect(
+          selected,
+          "DynamicAmountSelected event is missing",
+        ).not.to.equal(undefined);
+        const data = selected!.data as {
+          actualWsolAmountIn: BN;
+          expectedProfitLamports: BN;
+          largestCompleteAmount: BN;
+        };
+        result.selectedAmount = BigInt(String(data.actualWsolAmountIn));
+        result.expectedProfit = BigInt(String(data.expectedProfitLamports));
+        result.largestCompleteAmount = BigInt(
+          String(data.largestCompleteAmount),
+        );
+      }
+      expect(result.computeUnits)
+        .to.be.greaterThan(0)
+        .and.lessThan(SUCCESS_PATH_CU_LIMIT);
+      return result;
+    }
+
+    // Simulations do not commit account writes, so all three variants observe
+    // the exact same pool, BinArray, Clock-bank and user-account snapshot.
+    const fixed = await simulate(fixedInstruction, false);
+    const exactDynamic = await simulate(exactDynamicInstruction, true);
+    const rangedDynamic = await simulate(rangedDynamicInstruction, true);
+    return { fixed, exactDynamic, rangedDynamic };
   }
 
   async function executeFixedDirection(
@@ -1154,6 +1306,46 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     console.log(
       `Surfpool dynamic reverse consumed ${result.computeUnits} CU, amount=${result.selectedAmount}, profit=${result.profit}`,
     );
+  });
+
+  it("keeps fixed and dynamic minimum parity on one immutable real-protocol snapshot", async () => {
+    const fixture = await buildBestDirectionFixture();
+    const quoteVault = await connection.getAccountInfo(
+      fixture.pumpQuoteVault,
+      "processed",
+    );
+    if (!quoteVault) throw new Error("Pump quote vault was not found");
+    const originalAmount = quoteVault.data.readBigUInt64LE(64);
+
+    for (const [controlledAmount, expectedDirection] of [
+      [originalAmount / 2n, "pump-to-meteora"],
+      [originalAmount * 4n, "meteora-to-pump"],
+    ] as const) {
+      await setTokenAccountAmount(fixture.pumpQuoteVault, controlledAmount);
+      const { fixed, exactDynamic, rangedDynamic } =
+        await simulateBestDirectionParity(fixture);
+
+      expect(fixed.direction).to.equal(expectedDirection);
+      expect(exactDynamic.direction).to.equal(fixed.direction);
+      expect(exactDynamic.selectedAmount).to.equal(
+        BigInt(PARITY_FIXED_AMOUNT.toString()),
+      );
+      expect(exactDynamic.profit).to.equal(fixed.profit);
+      expect(exactDynamic.expectedProfit).to.equal(fixed.profit);
+      expect(rangedDynamic.profit >= fixed.profit).to.equal(true);
+      expect(
+        rangedDynamic.selectedAmount! >=
+          BigInt(PARITY_FIXED_AMOUNT.toString()),
+      ).to.equal(true);
+      expect(
+        rangedDynamic.selectedAmount! <=
+          BigInt(PARITY_MAX_AMOUNT.toString()),
+      ).to.equal(true);
+
+      console.log(
+        `Surfpool parity ${expectedDirection}: fixedProfit=${fixed.profit} exactDynamicProfit=${exactDynamic.profit} rangedProfit=${rangedDynamic.profit} rangedAmount=${rangedDynamic.selectedAmount} fixedCU=${fixed.computeUnits} exactDynamicCU=${exactDynamic.computeUnits} rangedCU=${rangedDynamic.computeUnits}`,
+      );
+    }
   });
 
   it("best-direction continues to reverse when the forward quote is incomplete on a controlled real-protocol state", async () => {

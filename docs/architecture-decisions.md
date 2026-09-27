@@ -143,6 +143,28 @@ This file records durable executor decisions. Deployment facts belong in
   above even the reviewed 350,000-CU ceiling, so this decision is retained as
   a useful optimization but does not close the multi-pool production gate.
 
+## ADR-008: Require complete minimum quotes before declaring no profit
+
+- Status: accepted
+- Date: 2026-09-27
+- Decision: a dynamic search may execute a profitable, completely quoted
+  direction even when the other direction is incomplete. If neither direction
+  has a profitable candidate, however, `NoProfitableDirection` is returned only
+  when both directions completed an exact quote at `min_wsol_amount_in`.
+  Otherwise the existing `BestDirectionQuoteIncomplete` error is returned.
+- Decision: failure-only diagnostics record, for both directions, minimum-quote
+  completeness/output, coverage cap, curve stop reason and visited-Bin count.
+  Successful transactions do not pay this logging cost.
+- Rationale: an incomplete direction may contain the profitable route. Calling
+  that state "no profit" makes coverage failures indistinguishable from a real
+  complete two-direction no-profit result.
+- Verification: unit tests cover complete no-profit, one-sided incomplete and
+  one-sided profitable fallback. On one immutable A13 real-protocol Surfpool
+  snapshot, fixed `0.005 SOL`, dynamic `min=max=0.005 SOL`, and dynamic
+  `0.005..0.02 SOL` were simulated without committing state in both directions.
+  Fixed and exact-dynamic direction/profit matched exactly; all six simulations
+  stayed below the `300,000 CU` target.
+
 ## Decision update rule
 
 When a decision changes, mark the old entry as superseded and add a replacement.

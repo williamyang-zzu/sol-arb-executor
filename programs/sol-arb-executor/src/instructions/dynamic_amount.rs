@@ -211,6 +211,8 @@ struct DirectionChoice {
 struct DirectionSearch {
     best: Option<DirectionChoice>,
     complete_seen: bool,
+    minimum_quote_complete: bool,
+    minimum_amount_out: u64,
     largest_complete_amount: u64,
     boundary_candidates: u8,
     interior_candidates: u8,
@@ -226,6 +228,13 @@ struct DynamicSelection {
     boundary_candidates: u8,
     interior_candidates: u8,
     visited_bins: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DynamicDecision {
+    Selected(SelectedDirection, DirectionChoice),
+    QuoteIncomplete,
+    NoProfitableDirection,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -405,6 +414,8 @@ fn select_dynamic(
         DirectionSearch {
             best: None,
             complete_seen: false,
+            minimum_quote_complete: false,
+            minimum_amount_out: 0,
             largest_complete_amount: 0,
             boundary_candidates: 0,
             interior_candidates: 0,
@@ -413,29 +424,16 @@ fn select_dynamic(
         }
     };
 
-    if !forward.complete_seen && !reverse.complete_seen {
-        msg!(
-            "dynamic_quote_incomplete forward_stop={} forward_cap={} forward_bins={} reverse_stop={} reverse_cap={} reverse_bins={}",
-            forward.curve_stop_reason.code(),
-            forward.largest_complete_amount,
-            forward.visited_bins,
-            reverse.curve_stop_reason.code(),
-            reverse.largest_complete_amount,
-            reverse.visited_bins,
-        );
-        return err!(ArbError::BestDirectionQuoteIncomplete);
-    }
-    let (direction, selected) = match (forward.best, reverse.best) {
-        (Some(forward_choice), Some(reverse_choice)) => {
-            if better_choice(reverse_choice, forward_choice) {
-                (SelectedDirection::MeteoraToPump, reverse_choice)
-            } else {
-                (SelectedDirection::PumpToMeteora, forward_choice)
-            }
+    let (direction, selected) = match decide_dynamic_search(&forward, &reverse) {
+        DynamicDecision::Selected(direction, choice) => (direction, choice),
+        DynamicDecision::QuoteIncomplete => {
+            log_dynamic_failure("incomplete", &forward, &reverse);
+            return err!(ArbError::BestDirectionQuoteIncomplete);
         }
-        (Some(choice), None) => (SelectedDirection::PumpToMeteora, choice),
-        (None, Some(choice)) => (SelectedDirection::MeteoraToPump, choice),
-        (None, None) => return err!(ArbError::NoProfitableDirection),
+        DynamicDecision::NoProfitableDirection => {
+            log_dynamic_failure("no_profit", &forward, &reverse);
+            return err!(ArbError::NoProfitableDirection);
+        }
     };
     let stats = match direction {
         SelectedDirection::PumpToMeteora => &forward,
@@ -449,6 +447,43 @@ fn select_dynamic(
         interior_candidates: stats.interior_candidates,
         visited_bins: stats.visited_bins,
     })
+}
+
+fn decide_dynamic_search(forward: &DirectionSearch, reverse: &DirectionSearch) -> DynamicDecision {
+    match (forward.best, reverse.best) {
+        (Some(forward_choice), Some(reverse_choice)) => {
+            if better_choice(reverse_choice, forward_choice) {
+                DynamicDecision::Selected(SelectedDirection::MeteoraToPump, reverse_choice)
+            } else {
+                DynamicDecision::Selected(SelectedDirection::PumpToMeteora, forward_choice)
+            }
+        }
+        (Some(choice), None) => DynamicDecision::Selected(SelectedDirection::PumpToMeteora, choice),
+        (None, Some(choice)) => DynamicDecision::Selected(SelectedDirection::MeteoraToPump, choice),
+        (None, None) if forward.minimum_quote_complete && reverse.minimum_quote_complete => {
+            DynamicDecision::NoProfitableDirection
+        }
+        (None, None) => DynamicDecision::QuoteIncomplete,
+    }
+}
+
+fn log_dynamic_failure(kind: &str, forward: &DirectionSearch, reverse: &DirectionSearch) {
+    msg!(
+        "dynamic_quote_failure kind={} forward_complete={} forward_min_complete={} forward_min_out={} forward_stop={} forward_cap={} forward_bins={} reverse_complete={} reverse_min_complete={} reverse_min_out={} reverse_stop={} reverse_cap={} reverse_bins={}",
+        kind,
+        u8::from(forward.complete_seen),
+        u8::from(forward.minimum_quote_complete),
+        forward.minimum_amount_out,
+        forward.curve_stop_reason.code(),
+        forward.largest_complete_amount,
+        forward.visited_bins,
+        u8::from(reverse.complete_seen),
+        u8::from(reverse.minimum_quote_complete),
+        reverse.minimum_amount_out,
+        reverse.curve_stop_reason.code(),
+        reverse.largest_complete_amount,
+        reverse.visited_bins,
+    );
 }
 
 #[inline(never)]
@@ -806,6 +841,8 @@ where
 {
     let mut best = None;
     let mut complete_seen = false;
+    let mut minimum_quote_complete = false;
+    let mut minimum_amount_out = 0;
     for amount_in in candidates.iter().copied().filter(|amount| {
         *amount >= context.min_amount && *amount <= context.largest_complete_amount
     }) {
@@ -813,6 +850,10 @@ where
             continue;
         };
         complete_seen = true;
+        if amount_in == context.min_amount {
+            minimum_quote_complete = true;
+            minimum_amount_out = quote.amount_out;
+        }
         let Some(profit) = quote.amount_out.checked_sub(amount_in) else {
             continue;
         };
@@ -833,6 +874,8 @@ where
     DirectionSearch {
         best,
         complete_seen,
+        minimum_quote_complete,
+        minimum_amount_out,
         largest_complete_amount: context.largest_complete_amount,
         boundary_candidates: context.boundary_candidates,
         interior_candidates: context.interior_candidates,
@@ -845,6 +888,8 @@ fn incomplete_direction(curve: &DlmmCurve, largest_complete_amount: u64) -> Dire
     DirectionSearch {
         best: None,
         complete_seen: false,
+        minimum_quote_complete: false,
+        minimum_amount_out: 0,
         largest_complete_amount,
         boundary_candidates: 0,
         interior_candidates: 0,
@@ -1240,6 +1285,34 @@ mod tests {
         }
     }
 
+    fn direction_search(complete_seen: bool, best: Option<DirectionChoice>) -> DirectionSearch {
+        DirectionSearch {
+            best,
+            complete_seen,
+            minimum_quote_complete: complete_seen,
+            minimum_amount_out: if complete_seen { 6 } else { 0 },
+            largest_complete_amount: if complete_seen { 5 } else { 4 },
+            boundary_candidates: 0,
+            interior_candidates: 0,
+            visited_bins: 1,
+            curve_stop_reason: if complete_seen {
+                CurveStopReason::InputLimitReached
+            } else {
+                CurveStopReason::MissingBinArray
+            },
+        }
+    }
+
+    fn profitable_choice(profit: u64) -> DirectionChoice {
+        DirectionChoice {
+            amount_in: 5,
+            amount_out: 5 + profit,
+            profit,
+            used_indices: [0, 0],
+            used_len: 1,
+        }
+    }
+
     fn exact_pump_input_for_target_out(market: &MarketState, target_out: u64) -> u64 {
         let mut low = 1_u64;
         let mut high = 1_u64;
@@ -1284,6 +1357,53 @@ mod tests {
         ] {
             assert!(validate_args(&args).is_err());
         }
+    }
+
+    #[test]
+    fn no_choice_is_no_profit_only_when_both_minimum_quotes_are_complete() {
+        assert_eq!(
+            decide_dynamic_search(&direction_search(true, None), &direction_search(true, None),),
+            DynamicDecision::NoProfitableDirection
+        );
+        assert_eq!(
+            decide_dynamic_search(
+                &direction_search(false, None),
+                &direction_search(true, None),
+            ),
+            DynamicDecision::QuoteIncomplete
+        );
+        assert_eq!(
+            decide_dynamic_search(
+                &direction_search(true, None),
+                &direction_search(false, None),
+            ),
+            DynamicDecision::QuoteIncomplete
+        );
+        let mut nonminimum_only = direction_search(true, None);
+        nonminimum_only.minimum_quote_complete = false;
+        assert_eq!(
+            decide_dynamic_search(&nonminimum_only, &direction_search(true, None)),
+            DynamicDecision::QuoteIncomplete
+        );
+    }
+
+    #[test]
+    fn complete_profitable_direction_survives_other_direction_incompleteness() {
+        let choice = profitable_choice(2);
+        assert_eq!(
+            decide_dynamic_search(
+                &direction_search(true, Some(choice)),
+                &direction_search(false, None),
+            ),
+            DynamicDecision::Selected(SelectedDirection::PumpToMeteora, choice)
+        );
+        assert_eq!(
+            decide_dynamic_search(
+                &direction_search(false, None),
+                &direction_search(true, Some(choice)),
+            ),
+            DynamicDecision::Selected(SelectedDirection::MeteoraToPump, choice)
+        );
     }
 
     #[test]
@@ -1364,6 +1484,7 @@ mod tests {
         let search = search_reverse(&market, &curve, 5, 25, 1);
 
         assert!(!search.complete_seen);
+        assert!(!search.minimum_quote_complete);
         assert!(search.best.is_none());
         assert_eq!(search.largest_complete_amount, 4);
         assert_eq!(search.curve_stop_reason, CurveStopReason::MissingBinArray);
@@ -1380,6 +1501,7 @@ mod tests {
         let search = search_reverse(&market, &curve, 5, 25, 1);
 
         assert!(search.complete_seen);
+        assert!(search.minimum_quote_complete);
         assert_eq!(search.largest_complete_amount, 5);
     }
 
@@ -1456,6 +1578,7 @@ mod tests {
         let search = search_forward(&market, &curve, largest + 1, 1_000_000, 1);
 
         assert!(!search.complete_seen);
+        assert!(!search.minimum_quote_complete);
         assert!(search.best.is_none());
         assert_eq!(search.largest_complete_amount, largest);
         assert_eq!(search.curve_stop_reason, CurveStopReason::MissingBinArray);
@@ -1473,6 +1596,7 @@ mod tests {
         let search = search_forward(&market, &curve, largest, 1_000_000, 1);
 
         assert!(search.complete_seen);
+        assert!(search.minimum_quote_complete);
         assert_eq!(search.largest_complete_amount, largest);
     }
 }

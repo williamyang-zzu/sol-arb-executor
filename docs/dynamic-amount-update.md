@@ -44,6 +44,13 @@ emits one compact diagnostic line. Its numeric stop codes are:
 The diagnostic is emitted only on the final failure path. It does not add a
 per-Bin production log or move quote authority off-chain.
 
+The failure classification was subsequently tightened: when neither direction
+is profitable, `NoProfitableDirection` now requires both directions to have
+completed the exact configured minimum quote. If either minimum quote is
+incomplete, the result is `BestDirectionQuoteIncomplete` even when the other
+direction completed but was unprofitable. A profitable complete direction is
+still allowed to execute when the opposite direction is incomplete.
+
 ## Compatibility
 
 The account layout is unchanged. Existing instruction discriminators and fixed
@@ -64,3 +71,10 @@ the 300,000-CU acceptance target. A denser DD3A pressure fixture improved to
 575,138/366,230 CU but still exceeded the reviewed 350,000-CU ceiling. Dynamic
 sizing therefore retains an open multi-pool CU release gate. No entry in this
 document asserts a mainnet deployment or profitable production result.
+
+The fixed/dynamic minimum parity harness uses three non-committing simulations
+against one immutable Surfpool bank state: fixed `0.005 SOL`, dynamic
+`min=max=0.005 SOL`, and dynamic `0.005..0.02 SOL`. On the controlled A13 route,
+the fixed and exact-dynamic variants selected the same direction and produced
+identical realized profit in both directions. The ranged dynamic variant kept
+the minimum candidate eligible and all variants remained below `300,000 CU`.

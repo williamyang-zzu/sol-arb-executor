@@ -66,3 +66,25 @@ are retained in
 currently signature-only: it is an input list for archive extraction and future
 fixed-versus-dynamic parity work, not a deterministic historical-state replay.
 It must not be hydrated with current pool account values.
+
+## Fixed versus dynamic minimum parity
+
+The Surfpool parity regression simulates three variants against one immutable
+real-protocol bank state without committing any of their account writes:
+
+```text
+fixed:          0.005 SOL
+dynamic exact:  min=max=0.005 SOL
+dynamic range:  0.005..0.02 SOL
+```
+
+The exact dynamic variant must match the fixed direction and realized profit;
+the ranged variant must retain the fixed minimum as an eligible candidate. Run
+it with the same public fixture variables used by the real-protocol suite:
+
+```bash
+SURFPOOL_PUMP_POOL=<pump-pool> \
+SURFPOOL_METEORA_POOL=<meteora-lb-pair> \
+SURFPOOL_TARGET_MINT=<target-mint> \
+npm run test:surfpool-amount-parity
+```
