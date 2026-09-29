@@ -10,6 +10,10 @@ interface SuccessFixture {
   wsolProfitLamports: string;
   feeLamports: number;
   computeUnitsConsumed: number;
+  dynamicSelection?: {
+    expectedProfitLamports: string;
+    eventBase64: string;
+  };
 }
 
 interface RollbackFixture {
@@ -111,6 +115,17 @@ describe("mainnet execution milestone evidence", function () {
           line.includes(`Program ${fixture.programId} invoke`),
         ),
       ).to.equal(true);
+      if (success.dynamicSelection) {
+        expect(success.dynamicSelection.expectedProfitLamports).to.equal(
+          success.wsolProfitLamports,
+        );
+        expect(
+          transaction!.meta?.logMessages?.includes(
+            `Program data: ${success.dynamicSelection.eventBase64}`,
+          ),
+          "DynamicAmountSelected event does not match the pinned sample",
+        ).to.equal(true);
+      }
 
       const pre = ownedTokenBalances(transaction!.meta!.preTokenBalances);
       const post = ownedTokenBalances(transaction!.meta!.postTokenBalances);

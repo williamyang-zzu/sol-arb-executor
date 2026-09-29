@@ -30,6 +30,58 @@
       "wsolProfitLamports": "380512",
       "feeLamports": 5900,
       "computeUnitsConsumed": 217595
+    },
+    {
+      "signature": "3o1HXS2oXQJZVa1wKzmL6ybzFUowaV5XrgD9qFes1LGfwELXi3ft6r6Jx61zg8wHAK5VpWxev4CX9XX5ADN4S5D6",
+      "slot": 451536353,
+      "transactionIndex": 474,
+      "wsolProfitLamports": "45546",
+      "feeLamports": 5105,
+      "computeUnitsConsumed": 247981,
+      "targetMint": "3kmygWKZBkCYrgZHKfiuB9UFKTcDLTFFsKo3BWpmpump",
+      "pumpPool": "4zLRGHwKdXyaTovP8UkV66CskWgo9E7kAaGYcw1vFh7E",
+      "meteoraPool": "BTqz73fRMm343nJ8FLn3vVmu9hjL3KeEmbearvj1JwyU",
+      "dynamicSelection": {
+        "direction": "meteora-to-pump",
+        "minWsolAmountIn": "5000000",
+        "maxWsolAmountIn": "20000000",
+        "balanceLimitedMax": "12859418",
+        "largestCompleteAmount": "12859418",
+        "actualWsolAmountIn": "12785591",
+        "expectedWsolAmountOut": "12831137",
+        "expectedProfitLamports": "45546",
+        "visitedBins": 2,
+        "boundaryCandidates": 1,
+        "interiorCandidates": 0,
+        "earlyStopUsed": false,
+        "eventBase64": "Mg0roTPt8SYBQEtMAAAAAAAALTEBAAAAABo4xAAAAAAAGjjEAAAAAAC3F8MAAAAAAKHJwwAAAAAA6rEAAAAAAAACAQAA"
+      }
+    },
+    {
+      "signature": "dmCBHKfabjG7apCE1dXGt5qHyiKHCynxb4HimmPpRfku9bidFDxKG7SC3uvnUWpGuy7GzLWupWBTBTc7eng1NnB",
+      "slot": 451536363,
+      "transactionIndex": 300,
+      "wsolProfitLamports": "70118",
+      "feeLamports": 5105,
+      "computeUnitsConsumed": 239786,
+      "targetMint": "3kmygWKZBkCYrgZHKfiuB9UFKTcDLTFFsKo3BWpmpump",
+      "pumpPool": "4zLRGHwKdXyaTovP8UkV66CskWgo9E7kAaGYcw1vFh7E",
+      "meteoraPool": "BTqz73fRMm343nJ8FLn3vVmu9hjL3KeEmbearvj1JwyU",
+      "dynamicSelection": {
+        "direction": "meteora-to-pump",
+        "minWsolAmountIn": "5000000",
+        "maxWsolAmountIn": "20000000",
+        "balanceLimitedMax": "12904964",
+        "largestCompleteAmount": "12904964",
+        "actualWsolAmountIn": "12904964",
+        "expectedWsolAmountOut": "12975082",
+        "expectedProfitLamports": "70118",
+        "visitedBins": 1,
+        "boundaryCandidates": 0,
+        "interiorCandidates": 0,
+        "earlyStopUsed": false,
+        "eventBase64": "Mg0roTPt8SYBQEtMAAAAAAAALTEBAAAAAATqxAAAAAAABOrEAAAAAAAE6sQAAAAAAOr7xQAAAAAA5hEBAAAAAAABAAAA"
+      }
     }
   ],
   "rollback": {
