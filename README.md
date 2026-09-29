@@ -253,6 +253,36 @@ ACK 返回错误，发送器仍记录本地已经生成的签名并交给监控�
 优先费。Loaded Accounts Data Size limit 暂不猜测设置；应先分别模拟固定方向和链上选方向，
 测出安全下限并预留余量后再启用。
 
+### Local WSOL funding utility
+
+`npm run wrap-sol` adds an exact lamport amount to the signer's standard WSOL
+ATA without depending on the native `spl-token` binary. It reads the RPC from
+`WRAP_SOL_RPC_URL`, `EXECUTOR_RPC_URL`, or `RPC_URL`, in that order, and never
+prints the selected URL. The wallet comes from `--wallet`,
+`WRAP_SOL_WALLET_PATH`, `WALLET_PATH`, or the standard Solana CLI keypair path.
+
+The default invocation only previews and simulates the signed transaction:
+
+```bash
+npm run wrap-sol -- \
+  --amount-lamports 240000000 \
+  --wallet /path/to/trader-wallet.json
+```
+
+After verifying the printed signer public key, WSOL ATA, balances, fee, and
+rent, repeat the same command with the explicit broadcast switch:
+
+```bash
+npm run wrap-sol -- \
+  --amount-lamports 240000000 \
+  --wallet /path/to/trader-wallet.json \
+  --execute
+```
+
+The utility creates the standard WSOL ATA idempotently when absent, transfers
+the requested native lamports, calls `SyncNative`, and verifies the confirmed
+post-transaction WSOL balance. It never prints the keypair path contents.
+
 ## Security boundaries and current limitations
 
 - CPI targets are hard-coded to the official PumpSwap and Meteora program IDs.
