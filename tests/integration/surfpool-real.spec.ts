@@ -44,7 +44,9 @@ const METEORA_PROGRAM_ID = new PublicKey(
 const EXECUTOR_PROGRAM_ID = new PublicKey(
   "RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51",
 );
-const SUCCESS_PATH_CU_LIMIT = 300_000;
+const SUCCESS_PATH_CU_LIMIT = Number(
+  process.env.SURFPOOL_COMPUTE_UNIT_LIMIT ?? "300000",
+);
 const SUCCESS_PATH_CU_PRICE_MICRO_LAMPORTS = 300;
 const PARITY_FIXED_AMOUNT = new BN(5_000_000);
 const PARITY_MAX_AMOUNT = new BN(20_000_000);
@@ -706,10 +708,9 @@ describe("Surfpool real-protocol CPI compatibility", function () {
         const selected = decodedEvents.find(
           (event) => event?.name === "dynamicAmountSelected",
         );
-        expect(
-          selected,
-          "DynamicAmountSelected event is missing",
-        ).not.to.equal(undefined);
+        expect(selected, "DynamicAmountSelected event is missing").not.to.equal(
+          undefined,
+        );
         const data = selected!.data as {
           actualWsolAmountIn: BN;
           expectedProfitLamports: BN;
@@ -1270,7 +1271,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     );
   });
 
-  it("dynamic best-direction selects a bounded Pump -> Meteora amount within 300k CU", async () => {
+  it("dynamic best-direction selects a bounded Pump -> Meteora amount within the configured CU budget", async () => {
     const fixture = await buildBestDirectionFixture(false);
     const quoteVault = await connection.getAccountInfo(
       fixture.pumpQuoteVault,
@@ -1289,7 +1290,7 @@ describe("Surfpool real-protocol CPI compatibility", function () {
     );
   });
 
-  it("dynamic best-direction selects a bounded Meteora -> Pump amount within 300k CU", async () => {
+  it("dynamic best-direction selects a bounded Meteora -> Pump amount within the configured CU budget", async () => {
     const fixture = await buildBestDirectionFixture();
     const quoteVault = await connection.getAccountInfo(
       fixture.pumpQuoteVault,
@@ -1334,12 +1335,10 @@ describe("Surfpool real-protocol CPI compatibility", function () {
       expect(exactDynamic.expectedProfit).to.equal(fixed.profit);
       expect(rangedDynamic.profit >= fixed.profit).to.equal(true);
       expect(
-        rangedDynamic.selectedAmount! >=
-          BigInt(PARITY_FIXED_AMOUNT.toString()),
+        rangedDynamic.selectedAmount! >= BigInt(PARITY_FIXED_AMOUNT.toString()),
       ).to.equal(true);
       expect(
-        rangedDynamic.selectedAmount! <=
-          BigInt(PARITY_MAX_AMOUNT.toString()),
+        rangedDynamic.selectedAmount! <= BigInt(PARITY_MAX_AMOUNT.toString()),
       ).to.equal(true);
 
       console.log(

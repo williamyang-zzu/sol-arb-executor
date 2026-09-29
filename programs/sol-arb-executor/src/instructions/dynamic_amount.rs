@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use core::cmp::Ordering;
 
 use crate::{
     constants::PUMP_PROGRAM_ID,
@@ -18,6 +19,7 @@ use crate::{
 
 const PUMP_FEE_DENOMINATOR: u128 = 10_000;
 const INTERIOR_NEIGHBORHOOD: u64 = 1;
+const INTERIOR_ROOT_PREFILTER_MARGIN: u128 = 32;
 const MAX_DYNAMIC_CANDIDATES: usize = 2 + MAX_QUOTE_VISITED_BINS_PER_DIRECTION * 4;
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Debug, Eq, PartialEq)]
@@ -156,10 +158,22 @@ impl DlmmCurve {
         if amount_in == 0 {
             return Err(QuoteError::InvalidInput);
         }
-        let segment = self
-            .as_slice()
-            .iter()
-            .find(|segment| amount_in <= segment.input_end)
+        // Segment input ends are strictly increasing. Candidate evaluation can
+        // revisit this lookup many times, so use a bounded binary search rather
+        // than rescanning every previously traversed Bin for each candidate.
+        let segments = self.as_slice();
+        let mut lower = 0_usize;
+        let mut upper = segments.len();
+        while lower < upper {
+            let midpoint = lower + (upper - lower) / 2;
+            if amount_in <= segments[midpoint].input_end {
+                upper = midpoint;
+            } else {
+                lower = midpoint + 1;
+            }
+        }
+        let segment = segments
+            .get(lower)
             .ok_or(QuoteError::InsufficientLiquidity)?;
         let remaining = amount_in
             .checked_sub(segment.input_start)
@@ -387,28 +401,35 @@ fn select_dynamic(
         min_profit,
     };
 
-    // Build and search each direction in its own non-inlined frame. This keeps
-    // the bounded 16-bin curve off the SBF heap without combining it with the
-    // caller's Anchor account frame (whose per-frame limit is 4 KiB).
-    let forward = search_forward_direction(
+    // Probe both directions at the configured minimum first. AMM/DLMM
+    // marginal execution only worsens as input grows, so a direction without
+    // positive gross spread at the smallest legal amount cannot become
+    // profitable later in the range. Only promising directions pay for the
+    // full bounded amount search.
+    let minimum_bounds = DynamicSearchBounds {
+        min_amount,
+        max_amount: min_amount,
+        min_profit,
+    };
+    let forward_minimum = probe_forward_direction(
         bin_array_accounts,
         bitmap_extension,
         market.target_is_x,
         timestamp,
         &market,
-        bounds,
+        minimum_bounds,
     )?;
 
     let cashback_sell_is_ready =
         crate::adapters::pump_swap::cashback_sell_is_ready(&accounts.pump_accounts())?;
-    let reverse = if cashback_sell_is_ready {
-        search_reverse_direction(
+    let reverse_minimum = if cashback_sell_is_ready {
+        probe_reverse_direction(
             bin_array_accounts,
             bitmap_extension,
             !market.target_is_x,
             timestamp,
             &market,
-            bounds,
+            minimum_bounds,
         )?
     } else {
         DirectionSearch {
@@ -422,6 +443,40 @@ fn select_dynamic(
             visited_bins: 0,
             curve_stop_reason: CurveStopReason::NoUsableLiquidity,
         }
+    };
+
+    let (expand_forward, expand_reverse) = directions_to_expand(
+        &forward_minimum,
+        &reverse_minimum,
+        bounds.min_amount,
+        bounds.max_amount,
+    );
+    // Each full direction remains in its own non-inlined frame. This keeps the
+    // bounded curve off the SBF heap without combining it with the caller's
+    // Anchor account frame (whose per-frame limit is 4 KiB).
+    let forward = if expand_forward {
+        search_forward_direction(
+            bin_array_accounts,
+            bitmap_extension,
+            market.target_is_x,
+            timestamp,
+            &market,
+            bounds,
+        )?
+    } else {
+        forward_minimum
+    };
+    let reverse = if expand_reverse {
+        search_reverse_direction(
+            bin_array_accounts,
+            bitmap_extension,
+            !market.target_is_x,
+            timestamp,
+            &market,
+            bounds,
+        )?
+    } else {
+        reverse_minimum
     };
 
     let (direction, selected) = match decide_dynamic_search(&forward, &reverse) {
@@ -447,6 +502,109 @@ fn select_dynamic(
         interior_candidates: stats.interior_candidates,
         visited_bins: stats.visited_bins,
     })
+}
+
+#[inline(never)]
+fn probe_forward_direction(
+    bin_array_accounts: &[AccountInfo<'_>],
+    bitmap_extension: Option<&[u8]>,
+    swap_for_y: bool,
+    timestamp: i64,
+    market: &MarketState,
+    bounds: DynamicSearchBounds,
+) -> Result<DirectionSearch> {
+    let input_limit = pump_buy_amount_out(market, bounds.min_amount).unwrap_or(u64::MAX);
+    let mut curve = DlmmCurve::new();
+    build_curve(
+        &mut curve,
+        &market.pair,
+        bin_array_accounts,
+        bitmap_extension,
+        swap_for_y,
+        timestamp,
+        input_limit,
+    )?;
+    let largest_complete_amount =
+        largest_forward_complete_amount(market, &curve, bounds.min_amount);
+    probe_minimum(&curve, bounds, largest_complete_amount, || {
+        evaluate_forward(market, &curve, bounds.min_amount)
+    })
+}
+
+#[inline(never)]
+fn probe_reverse_direction(
+    bin_array_accounts: &[AccountInfo<'_>],
+    bitmap_extension: Option<&[u8]>,
+    swap_for_y: bool,
+    timestamp: i64,
+    market: &MarketState,
+    bounds: DynamicSearchBounds,
+) -> Result<DirectionSearch> {
+    let mut curve = DlmmCurve::new();
+    build_curve(
+        &mut curve,
+        &market.pair,
+        bin_array_accounts,
+        bitmap_extension,
+        swap_for_y,
+        timestamp,
+        bounds.min_amount,
+    )?;
+    let largest_complete_amount = bounds.min_amount.min(curve.largest_complete_input());
+    probe_minimum(&curve, bounds, largest_complete_amount, || {
+        evaluate_reverse(market, &curve, bounds.min_amount)
+    })
+}
+
+fn probe_minimum<F>(
+    curve: &DlmmCurve,
+    bounds: DynamicSearchBounds,
+    largest_complete_amount: u64,
+    evaluate: F,
+) -> Result<DirectionSearch>
+where
+    F: FnOnce() -> std::result::Result<CurveQuote, QuoteError>,
+{
+    if largest_complete_amount < bounds.min_amount {
+        return Ok(incomplete_direction(curve, largest_complete_amount));
+    }
+    let Ok(quote) = evaluate() else {
+        return Ok(incomplete_direction(curve, largest_complete_amount));
+    };
+    let profit = quote.amount_out.saturating_sub(bounds.min_amount);
+    let best = (profit >= bounds.min_profit).then_some(DirectionChoice {
+        amount_in: bounds.min_amount,
+        amount_out: quote.amount_out,
+        profit,
+        used_indices: quote.used_indices,
+        used_len: quote.used_len,
+    });
+    Ok(DirectionSearch {
+        best,
+        complete_seen: true,
+        minimum_quote_complete: true,
+        minimum_amount_out: quote.amount_out,
+        largest_complete_amount,
+        boundary_candidates: 0,
+        interior_candidates: 0,
+        visited_bins: curve.visited_bins,
+        curve_stop_reason: curve.stop_reason,
+    })
+}
+
+fn directions_to_expand(
+    forward: &DirectionSearch,
+    reverse: &DirectionSearch,
+    min_amount: u64,
+    max_amount: u64,
+) -> (bool, bool) {
+    if max_amount == min_amount {
+        return (false, false);
+    }
+    (
+        forward.minimum_quote_complete && forward.minimum_amount_out > min_amount,
+        reverse.minimum_quote_complete && reverse.minimum_amount_out > min_amount,
+    )
 }
 
 fn decide_dynamic_search(forward: &DirectionSearch, reverse: &DirectionSearch) -> DynamicDecision {
@@ -1020,7 +1178,7 @@ fn forward_interior_candidate(
     let total_fee_bps = pump_total_fee_bps(market)?;
     let effective_quote_reserve = u128::from(market.pump_quote_reserve)
         .checked_add(u128::from(market.pump_virtual_quote_reserve))?;
-    let root = sqrt_product_ratio(
+    let ratio = normalized_product_ratio(
         &[
             u128::from(segment.output_capacity()),
             u128::from(market.pump_base_reserve),
@@ -1032,6 +1190,17 @@ fn forward_interior_candidate(
             PUMP_FEE_DENOMINATOR.checked_add(u128::from(total_fee_bps))?,
         ],
     )?;
+    let fee_factor = PUMP_FEE_DENOMINATOR.checked_add(u128::from(total_fee_bps))?;
+    let lower_root = effective_quote_reserve
+        .checked_add(u128::from(segment_start).checked_mul(PUMP_FEE_DENOMINATOR)? / fee_factor)?;
+    let upper_root = effective_quote_reserve.checked_add(div_ceil(
+        u128::from(segment_end).checked_mul(PUMP_FEE_DENOMINATOR)?,
+        fee_factor,
+    )?)?;
+    if sqrt_interval_definitely_excludes(ratio, lower_root, upper_root) {
+        return None;
+    }
+    let root = ratio.sqrt_floor()?;
     if root <= effective_quote_reserve {
         return None;
     }
@@ -1050,7 +1219,7 @@ fn reverse_interior_candidate(market: &MarketState, segment: DlmmSegment) -> Opt
     }
     let effective_quote_reserve = u128::from(market.pump_quote_reserve)
         .checked_add(u128::from(market.pump_virtual_quote_reserve))?;
-    let root = sqrt_product_ratio(
+    let ratio = normalized_product_ratio(
         &[
             u128::from(segment.output_capacity()),
             effective_quote_reserve,
@@ -1059,6 +1228,14 @@ fn reverse_interior_candidate(market: &MarketState, segment: DlmmSegment) -> Opt
         ],
         &[u128::from(segment.input_capacity()), PUMP_FEE_DENOMINATOR],
     )?;
+    let lower_root =
+        u128::from(market.pump_base_reserve).checked_add(u128::from(segment.output_start))?;
+    let upper_root =
+        u128::from(market.pump_base_reserve).checked_add(u128::from(segment.output_end))?;
+    if sqrt_interval_definitely_excludes(ratio, lower_root, upper_root) {
+        return None;
+    }
+    let root = ratio.sqrt_floor()?;
     let target_at_optimum = root.checked_sub(u128::from(market.pump_base_reserve))?;
     if target_at_optimum <= u128::from(segment.output_start)
         || target_at_optimum >= u128::from(segment.output_end)
@@ -1165,6 +1342,12 @@ impl Normalized {
         })
     }
 
+    fn compare(self, other: Self) -> Ordering {
+        self.exponent
+            .cmp(&other.exponent)
+            .then_with(|| self.mantissa.cmp(&other.mantissa))
+    }
+
     fn sqrt_floor(self) -> Option<u128> {
         let mut exponent = self.exponent;
         let mut mantissa = u128::from(self.mantissa);
@@ -1182,7 +1365,12 @@ impl Normalized {
     }
 }
 
+#[cfg(test)]
 fn sqrt_product_ratio(numerators: &[u128], denominators: &[u128]) -> Option<u128> {
+    normalized_product_ratio(numerators, denominators)?.sqrt_floor()
+}
+
+fn normalized_product_ratio(numerators: &[u128], denominators: &[u128]) -> Option<Normalized> {
     let mut value = Normalized::from_u128(1)?;
     for numerator in numerators {
         value = value.multiply(Normalized::from_u128(*numerator)?)?;
@@ -1190,7 +1378,26 @@ fn sqrt_product_ratio(numerators: &[u128], denominators: &[u128]) -> Option<u128
     for denominator in denominators {
         value = value.divide(Normalized::from_u128(*denominator)?)?;
     }
-    value.sqrt_floor()
+    Some(value)
+}
+
+fn sqrt_interval_definitely_excludes(
+    squared_value: Normalized,
+    lower_root: u128,
+    upper_root: u128,
+) -> bool {
+    let conservative_lower = lower_root.saturating_sub(INTERIOR_ROOT_PREFILTER_MARGIN);
+    let conservative_upper = upper_root.saturating_add(INTERIOR_ROOT_PREFILTER_MARGIN);
+    let below = normalized_square(conservative_lower)
+        .is_some_and(|lower_squared| squared_value.compare(lower_squared) != Ordering::Greater);
+    let above = normalized_square(conservative_upper)
+        .is_some_and(|upper_squared| squared_value.compare(upper_squared) != Ordering::Less);
+    below || above
+}
+
+fn normalized_square(value: u128) -> Option<Normalized> {
+    let normalized = Normalized::from_u128(value)?;
+    normalized.multiply(normalized)
 }
 
 fn integer_sqrt(value: u128) -> u128 {
@@ -1388,6 +1595,25 @@ mod tests {
     }
 
     #[test]
+    fn full_search_expands_only_directions_with_positive_minimum_spread() {
+        let positive = direction_search(true, None);
+        let mut flat = direction_search(true, None);
+        flat.minimum_amount_out = 5;
+        let incomplete = direction_search(false, None);
+
+        assert_eq!(directions_to_expand(&positive, &flat, 5, 25), (true, false));
+        assert_eq!(directions_to_expand(&flat, &positive, 5, 25), (false, true));
+        assert_eq!(
+            directions_to_expand(&incomplete, &positive, 5, 25),
+            (false, true)
+        );
+        assert_eq!(
+            directions_to_expand(&positive, &positive, 5, 5),
+            (false, false)
+        );
+    }
+
+    #[test]
     fn complete_profitable_direction_survives_other_direction_incompleteness() {
         let choice = profitable_choice(2);
         assert_eq!(
@@ -1415,6 +1641,15 @@ mod tests {
         .unwrap();
         let expected = integer_sqrt(10_000_000_000_000_000_000_000_000);
         assert!(root.abs_diff(expected) <= 2);
+    }
+
+    #[test]
+    fn interior_root_prefilter_is_conservative_near_boundaries() {
+        let squared = normalized_product_ratio(&[10_000], &[1]).unwrap();
+        assert!(!sqrt_interval_definitely_excludes(squared, 99, 101));
+        assert!(!sqrt_interval_definitely_excludes(squared, 100, 100));
+        assert!(sqrt_interval_definitely_excludes(squared, 200, 300));
+        assert!(sqrt_interval_definitely_excludes(squared, 1, 50));
     }
 
     #[test]
@@ -1474,6 +1709,31 @@ mod tests {
     }
 
     #[test]
+    fn minimum_probe_evaluates_only_the_exact_minimum() {
+        let mut curve = DlmmCurve::new();
+        curve.push(segment(0, 10, 0, 20)).unwrap();
+        curve.visited_bins = 1;
+        curve.stop_reason = CurveStopReason::InputLimitReached;
+        let bounds = DynamicSearchBounds {
+            min_amount: 5,
+            max_amount: 5,
+            min_profit: 1,
+        };
+        let search = probe_minimum(&curve, bounds, 5, || {
+            Ok(CurveQuote {
+                amount_out: 7,
+                used_indices: [0, 0],
+                used_len: 1,
+            })
+        })
+        .unwrap();
+        assert!(search.minimum_quote_complete);
+        assert_eq!(search.boundary_candidates, 0);
+        assert_eq!(search.interior_candidates, 0);
+        assert_eq!(search.best.unwrap().amount_in, 5);
+    }
+
+    #[test]
     fn reverse_coverage_below_minimum_is_incomplete() {
         let market = market();
         let mut curve = DlmmCurve::new();
@@ -1509,9 +1769,14 @@ mod tests {
     fn curve_quotes_inside_a_segment_without_replaying_prior_bins() {
         let mut curve = DlmmCurve::new();
         curve.push(segment(0, 1_000, 0, 1_000)).unwrap();
+        curve.push(segment(1_000, 2_000, 1_000, 2_000)).unwrap();
+        curve.push(segment(2_000, 3_000, 2_000, 3_000)).unwrap();
         curve.visited_bins = 1;
         assert_eq!(curve.quote(250).unwrap().amount_out, 250);
-        assert!(curve.quote(1_001).is_err());
+        assert_eq!(curve.quote(1_000).unwrap().amount_out, 1_000);
+        assert_eq!(curve.quote(1_001).unwrap().amount_out, 1_001);
+        assert_eq!(curve.quote(2_999).unwrap().amount_out, 2_999);
+        assert!(curve.quote(3_001).is_err());
     }
 
     #[test]

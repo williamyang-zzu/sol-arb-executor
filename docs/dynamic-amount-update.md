@@ -78,3 +78,23 @@ against one immutable Surfpool bank state: fixed `0.005 SOL`, dynamic
 the fixed and exact-dynamic variants selected the same direction and produced
 identical realized profit in both directions. The ranged dynamic variant kept
 the minimum candidate eligible and all variants remained below `300,000 CU`.
+
+## Staged-search update
+
+The production dynamic path now performs exact minimum-amount probes in both
+directions before expanding the bounded search. Only a direction whose minimum
+quote has positive gross WSOL spread is searched through the configured maximum.
+This is an on-chain execution-time decision; Searcher still does not quote or
+choose the direction or amount.
+
+Minimum probes evaluate one exact amount without generating boundary/interior
+candidates. Full searches retain all previous candidate and safety semantics.
+Multi-segment candidate lookup is bounded binary search, and analytic interior
+roots use a conservative squared interval prefilter so roots that are clearly
+outside a segment do not pay for an integer square root. Near a segment boundary
+the original root and exact candidate quote are still used.
+
+Real-protocol Surfpool regression after this update measured the established
+A13 forward/reverse paths at 258,926/221,307 CU under 300,000. A denser route
+measured 321,796/281,947 CU under 350,000. The test CU limit is configurable via
+`SURFPOOL_COMPUTE_UNIT_LIMIT`; its default remains 300,000.

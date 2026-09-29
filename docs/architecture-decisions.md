@@ -165,6 +165,35 @@ This file records durable executor decisions. Deployment facts belong in
   Fixed and exact-dynamic direction/profit matched exactly; all six simulations
   stayed below the `300,000 CU` target.
 
+## ADR-009: Gate full amount search with exact minimum quotes
+
+- Status: accepted
+- Date: 2026-09-28
+- Decision: dynamic execution first quotes the exact configured minimum in both
+  directions. A direction is expanded across the bounded amount range only
+  when its minimum quote has positive gross WSOL spread. A complete minimum
+  quote with non-positive spread is not expanded because Pump constant-product
+  impact, ordered DLMM Bin traversal and percentage fees cannot improve that
+  direction's marginal execution as input increases.
+- Decision: minimum probes evaluate exactly one amount and do not generate Bin
+  boundaries or analytic interior candidates. Full searches keep the existing
+  endpoints, boundary samples, interior estimates, exact candidate re-quotes,
+  coverage limits and final balance checks. Curve candidate lookup uses binary
+  search, and a conservative squared-root interval check avoids expensive
+  interior square roots only when the optimum is demonstrably outside the
+  segment; near-boundary cases retain the original calculation.
+- Rationale: full maximum-range construction and optimization of an already
+  losing direction consumed material CU without changing the executable
+  result. The staged search removes that duplicated work without weakening
+  quote authority, amount bounds, fill guarantees or final profit safety.
+- Verification: unit tests cover expansion gating, exact-minimum probing,
+  conservative interior filtering and multi-segment lookup. The established
+  A13 public-state Surfpool fixture completed forward/reverse at 258,926 and
+  221,307 CU under a 300,000-CU limit. A denser public route completed at
+  321,796 and 281,947 CU under a reviewed 350,000-CU test limit. This confirms
+  that 300,000 remains appropriate for ordinary routes while dense dynamic
+  forward execution may require a configured 350,000-CU envelope.
+
 ## Decision update rule
 
 When a decision changes, mark the old entry as superseded and add a replacement.
