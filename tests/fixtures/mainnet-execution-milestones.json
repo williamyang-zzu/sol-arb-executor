@@ -82,6 +82,32 @@
         "earlyStopUsed": false,
         "eventBase64": "Mg0roTPt8SYBQEtMAAAAAAAALTEBAAAAAATqxAAAAAAABOrEAAAAAAAE6sQAAAAAAOr7xQAAAAAA5hEBAAAAAAABAAAA"
       }
+    },
+    {
+      "signature": "5P1vfhhQ1qUSUo36ZVaSK45XF2nBVLutRYhAi5wJ3eBbhms5bquRSkrUQTfSpNdNvQrRmWCttwk3Ft18AAiRjGGK",
+      "slot": 451867832,
+      "transactionIndex": 1129,
+      "wsolProfitLamports": "10812",
+      "feeLamports": 5105,
+      "computeUnitsConsumed": 349830,
+      "targetMint": "HgoScXAo4zFv5kDb6axGrwuz95FaVEcLskyDVZfo297z",
+      "pumpPool": "FdL11Uu5YRNCybePTpa3T2vqjUqi4Qo1uzj4pvKUqj4d",
+      "meteoraPool": "HmgTahYzMNEmZogSxJGEtQLDJ46iEJ7xHZo8Q2BZ9LQk",
+      "dynamicSelection": {
+        "direction": "pump-to-meteora",
+        "minWsolAmountIn": "5000000",
+        "maxWsolAmountIn": "250000000",
+        "balanceLimitedMax": "250000000",
+        "largestCompleteAmount": "250000000",
+        "actualWsolAmountIn": "5000000",
+        "expectedWsolAmountOut": "5010812",
+        "expectedProfitLamports": "10812",
+        "visitedBins": 7,
+        "boundaryCandidates": 5,
+        "interiorCandidates": 0,
+        "earlyStopUsed": false,
+        "eventBase64": "Mg0roTPt8SYAQEtMAAAAAACAsuYOAAAAAICy5g4AAAAAgLLmDgAAAABAS0wAAAAAAHx1TAAAAAAAPCoAAAAAAAAHBQAA"
+      }
     }
   ],
   "rollback": {
