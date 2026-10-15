@@ -44,7 +44,7 @@ Surfpool lazily clones the current value of every remote account it encounters.
 account data, so a past profitable pool state must not be represented as a
 Surfpool historical replay.
 
-The seven successful mainnet executions and one profit-condition rollback are
+The eight successful mainnet executions and one profit-condition rollback are
 instead pinned as transaction-evidence fixtures. The regression verifies their
 slot, executor invocation, status, compute units, fee, trader WSOL delta, and
 atomic restoration of the trader's non-WSOL token balances:
@@ -53,6 +53,21 @@ atomic restoration of the trader's non-WSOL token balances:
 MAINNET_ARCHIVE_RPC_URL=<historical-rpc-url> \
 npm run test:mainnet-milestones
 ```
+
+The Sender-tagged success additionally checks its committed SOL tip transfer,
+the trader's native fee/tip debit, and net profit after both costs. Sender mode
+and target TPS are operator-confirmed runtime labels, not facts inferred from
+the tip transfer alone. Unknown block transaction indexes remain null.
+
+For offline fixture consistency, without loading `.env`, a wallet or any RPC:
+
+```bash
+npm run test:mainnet-milestones:offline
+```
+
+This checks financial arithmetic and the recorded dynamic-selection event. It
+does not simulate a historical pool state; complete historical prestate is not
+included in the fixture. No live sending is part of either evidence command.
 
 `SURFPOOL_MAINNET_RPC_URL` or `RPC_URL` is used as a fallback. The selected RPC
 must retain `getTransaction` history for the pinned slots. This evidence suite

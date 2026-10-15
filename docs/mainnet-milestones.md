@@ -1,7 +1,8 @@
 # Mainnet validation milestones
 
 本文档记录 `sol-arb-executor` 已完成的可公开验证里程碑。这里只记录链上执行器的事实和
-验证边界，不记录客户端机会发现、报价、方向选择或发送策略。
+验证边界，不记录私有机会发现、报价、方向选择或发送策略。经明确要求记录的客户端接入验收标签，
+会单独标明运行侧证据来源，不把它当作仅凭链上交易即可推断的事实。
 
 ## 2026-08-10：首次主网盈利原子执行
 
@@ -105,6 +106,44 @@ WSOL 余额变化已经加入机器可读回归样本。该事实证明最小金
 
 本条不记录 RPC、钱包文件、账户密钥、发送基础设施、触发交易或机会发现规则。
 
+## 2026-10-15：Helius Sender SWQoS-only／50 TPS 阶段首笔已记录成功
+
+- Program ID：`RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51`
+- 运行侧验收标签：接入 Helius Sender SWQoS-only，并将目标发送频率提高至 `50 TPS` 后的首笔
+  已记录成功套利。此标签来自用户确认的运行配置和独立 Monitor 记录；不能仅凭链上 tip 证明发送路径。
+- 链上执行：动态金额、Pump → Meteora；目标 Token 余额在执行结束后恢复至初始值。
+
+| 交易 | 落链 slot | 实际投入 | 毛利润 | 毛收益率 | 网络费 | 实付 tip | 净利润 | 净收益率 | CU |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| [2xCLXgW2…n3jFUGA](https://solscan.io/tx/2xCLXgW2xtSRXZ8nv6HAPZMYmnqgVJUpHqy6GmastzAS3uvV4ZhieXgNXMzxLYJCJMefpZMuxuasmM8Urn3jFUGA) | 457,111,148 | 7,547,432 | 16,315 | 0.216166% | 5,090 | 5,000 | 6,225 | 0.082478% | 263,057 |
+
+金额单位为 lamports。链上时间为 `2026-10-15 04:53:11 UTC`（北京时间 `12:53:11`）。网络费
+已包含优先费，tip 单独扣除，不能重复计入网络费。WSOL 余额从 `253,536,734` 增至 `253,553,049`；
+交易者原生 SOL 扣减为 `10,090` lamports，等于网络费加实付 tip。区块内索引尚未核实，样本保留
+`null`，不填零。
+
+公开 `DynamicAmountSelected` 事件显示：余额和完整报价覆盖均允许搜索至 `25,000,000` lamports，
+最终选择 `7,547,432`，预计输出 `7,563,747`，预计利润与实际 WSOL 增量一致。该样本可作为
+动态金额、真实协议执行、Sender tip 成本扣除和非 WSOL 余额恢复的基准证据。
+
+机器可读记录位于
+[`tests/fixtures/mainnet-execution-milestones.json`](../tests/fixtures/mainnet-execution-milestones.json)。
+可先执行不访问网络、不加载 `.env` 或钱包的样本一致性检查：
+
+```bash
+npm run test:mainnet-milestones:offline
+```
+
+需要再次核验链上原始交易时，再由操作者配置历史 RPC，运行既有 `test:mainnet-milestones` 只读证据
+回归。尚未保存交易边界前的完整协议账户字节，因此本样本不是可直接确定性回放的历史 Surfpool 快照。
+
+截至本条，机器可读样本共八笔成功交易，合计毛利润 `741,917` lamports；扣除这些成功交易各自网络费
+和本条实付 tip 后为 `695,612` lamports。这不是全轮净收益：本条所在测试轮扣除全部交易及 ATA 创建
+手续费后、未计可回收租金的净结果为 `-26,207,095` lamports，不能把单笔成功描述成整轮盈利。
+
+除用户明确要求的接入方式和目标 TPS 标签外，不记录端点、地区、密钥、钱包文件、触发交易、事件
+门槛、Burst 配置、抢占规则或其他私有策略参数。
+
 ## 动态金额上线前：固定金额成功回归语料
 
 以下七笔主网成功交易来自动态金额模式引入前的一轮固定金额执行测试。这里仅固定公开交易签名，
@@ -133,16 +172,17 @@ WSOL 余额变化已经加入机器可读回归样本。该事实证明最小金
 
 ```text
 gross_profit = post_wsol_balance - pre_wsol_balance
-net_profit = gross_profit - transaction_fee
+net_profit = gross_profit - transaction_fee - paid_tip
 ```
 
-表中的收益率以该笔交易的公开链上输入为分母。净利润只额外扣除了该笔交易的网络费，
+表中的收益率以该笔交易的公开链上输入为分母。既有无独立 tip 的记录沿用只扣网络费的口径；新增
+Sender 样本额外扣除链上实际支付的 tip。净利润只扣该笔交易自身的网络费与已记录的实付 tip，
 不包含同轮其他交易、账户准备、Address Lookup Table 或其他基础设施成本。
 
 ### 验证边界
 
 这些交易证明对应版本的执行器曾在 Solana 主网真实协议账户上完成原子执行，并产生正向
-WSOL 余额变化。交易签名用于独立核验，不在本文档中展开路线、市场选择、参数配置或发送条件。
+WSOL 余额变化。交易签名用于独立核验，不在本文档中展开私有机会发现、市场筛选或执行触发条件。
 
 该里程碑不是安全审计、持续盈利证明或生产 SLA。协议升级、账户布局变化、Token 扩展、池流动性
 和客户端输入仍可能影响后续交易结果。

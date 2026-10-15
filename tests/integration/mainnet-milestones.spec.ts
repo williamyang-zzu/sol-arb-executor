@@ -1,7 +1,14 @@
 import "dotenv/config";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { ConfirmedTransactionMeta, Connection } from "@solana/web3.js";
+import {
+  ConfirmedTransactionMeta,
+  Connection,
+  SystemInstruction,
+  SystemProgram,
+  TransactionInstruction,
+  VersionedTransactionResponse,
+} from "@solana/web3.js";
 import { expect } from "chai";
 
 interface SuccessFixture {
@@ -10,6 +17,10 @@ interface SuccessFixture {
   wsolProfitLamports: string;
   feeLamports: number;
   computeUnitsConsumed: number;
+  tipLamports?: number;
+  tipRecipient?: string;
+  netProfitLamports?: string;
+  nativePayerDebitLamports?: string;
   dynamicSelection?: {
     expectedProfitLamports: string;
     eventBase64: string;
@@ -90,6 +101,59 @@ function expectNonWsolBalancesUnchanged(meta: ConfirmedTransactionMeta): void {
   expect(post).to.deep.equal(pre);
 }
 
+function expectRecordedTip(
+  transaction: VersionedTransactionResponse,
+  success: SuccessFixture,
+): void {
+  if (success.tipLamports === undefined) return;
+  const { message } = transaction.transaction;
+  const meta = transaction.meta!;
+  const keys = [
+    ...message.staticAccountKeys,
+    ...(meta.loadedAddresses?.writable ?? []),
+    ...(meta.loadedAddresses?.readonly ?? []),
+  ];
+  let paidTip = 0n;
+  for (const instruction of message.compiledInstructions) {
+    const programId = keys[instruction.programIdIndex];
+    const data = Buffer.from(instruction.data);
+    if (
+      !programId.equals(SystemProgram.programId) ||
+      data.length !== 12 ||
+      data.readUInt32LE(0) !== 2
+    ) {
+      continue;
+    }
+    const transfer = SystemInstruction.decodeTransfer(
+      new TransactionInstruction({
+        programId,
+        data,
+        keys: instruction.accountKeyIndexes.map((index) => ({
+          pubkey: keys[index],
+          isSigner: message.isAccountSigner(index),
+          isWritable: message.isAccountWritable(index),
+        })),
+      }),
+    );
+    if (
+      transfer.fromPubkey.toBase58() === fixture.trader &&
+      transfer.toPubkey.toBase58() === success.tipRecipient
+    ) {
+      paidTip += BigInt(transfer.lamports);
+    }
+  }
+  expect(paidTip).to.equal(BigInt(success.tipLamports));
+  expect(
+    BigInt(success.wsolProfitLamports) - BigInt(meta.fee) - paidTip,
+  ).to.equal(BigInt(success.netProfitLamports!));
+  if (success.nativePayerDebitLamports !== undefined) {
+    expect(keys[0].toBase58()).to.equal(fixture.trader);
+    expect(BigInt(meta.preBalances[0]) - BigInt(meta.postBalances[0])).to.equal(
+      BigInt(success.nativePayerDebitLamports),
+    );
+  }
+}
+
 describe("mainnet execution milestone evidence", function () {
   this.timeout(60_000);
 
@@ -138,6 +202,7 @@ describe("mainnet execution milestone evidence", function () {
         BigInt(success.wsolProfitLamports),
       );
       expectNonWsolBalancesUnchanged(transaction!.meta!);
+      expectRecordedTip(transaction!, success);
     });
   }
 
