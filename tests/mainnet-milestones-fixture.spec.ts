@@ -130,4 +130,40 @@ describe("offline mainnet milestone fixture consistency", () => {
     expect(row!.transactionIndex).to.equal(null);
     expect(row!.evidence?.historicalPrestateAvailable).to.equal(false);
   });
+
+  it("pins both October 17 successes with paid tips and no invented historical prestate", () => {
+    const expected = [
+      {
+        signature:
+          "24HkWA3A6wMbQVRW7fdTzt1o5Enx2LnwgeAvg4AqpHEubdJ142GEWGVMBUPTPTcs6LxpRykkDgS47sbaw5Td7ock",
+        slot: 457974740,
+        transactionIndex: 711,
+        gross: "207203",
+        net: "197113",
+      },
+      {
+        signature:
+          "37JwTSkodH7xgLnK3LjTt5MUXXQbmrP39qQpcopa2pDzcUNqMTdjuey2EoG4x6qjGCFE1r4rPp1KBmfSxH4GWLec",
+        slot: 457975617,
+        transactionIndex: 932,
+        gross: "230381",
+        net: "220291",
+      },
+    ];
+    for (const entry of expected) {
+      const row = fixture.successes.find(
+        (sample) => sample.signature === entry.signature,
+      );
+      expect(row, "missing pinned mainnet success").not.to.equal(undefined);
+      expect(row!.slot).to.equal(entry.slot);
+      expect(row!.transactionIndex).to.equal(entry.transactionIndex);
+      expect(row!.wsolProfitLamports).to.equal(entry.gross);
+      expect(row!.netProfitLamports).to.equal(entry.net);
+      expect(row!.feeLamports).to.equal(5_090);
+      expect(row!.tipLamports).to.equal(5_000);
+      expect(row!.targetTokenBalancesUnchanged).to.equal(true);
+      expect(row!.dynamicSelection?.actualWsolAmountIn).to.equal("25000000");
+      expect(row!.evidence?.historicalPrestateAvailable).to.equal(false);
+    }
+  });
 });

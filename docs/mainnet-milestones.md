@@ -144,6 +144,37 @@ npm run test:mainnet-milestones:offline
 除用户明确要求的接入方式和目标 TPS 标签外，不记录端点、地区、密钥、钱包文件、触发交易、事件
 门槛、Burst 配置、抢占规则或其他私有策略参数。
 
+## 2026-10-17：新增两笔动态金额主网成功执行样本
+
+- Program ID：`RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51`
+- 结果：同一轮受控主网测试新增两笔盈利原子执行，均由动态金额指令选择实际投入金额。
+- 证据：已只读核验交易原始数据、`DynamicAmountSelected` 事件、交易者 WSOL 与原生 SOL
+  余额变化；两笔交易的目标 Token 余额均恢复至执行前状态。
+
+| 交易 | 落链 slot | 区块内索引 | 实际投入 | 毛利润 | 毛收益率 | 网络费 | 实付 tip | 净利润 | 净收益率 | CU |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| [24HkWA3A…w5Td7ock](https://solscan.io/tx/24HkWA3A6wMbQVRW7fdTzt1o5Enx2LnwgeAvg4AqpHEubdJ142GEWGVMBUPTPTcs6LxpRykkDgS47sbaw5Td7ock) | 457,974,740 | 711 | 25,000,000 | 207,203 | 0.828812% | 5,090 | 5,000 | 197,113 | 0.788452% | 253,194 |
+| [37JwTSko…xH4GWLec](https://solscan.io/tx/37JwTSkodH7xgLnK3LjTt5MUXXQbmrP39qQpcopa2pDzcUNqMTdjuey2EoG4x6qjGCFE1r4rPp1KBmfSxH4GWLec) | 457,975,617 | 932 | 25,000,000 | 230,381 | 0.921524% | 5,090 | 5,000 | 220,291 | 0.881164% | 254,631 |
+
+金额单位为 lamports，区块内索引为零基。链上时间分别为 `2026-10-17 08:44:35 UTC`、
+`08:47:43 UTC`（北京时间 `16:44:35`、`16:47:43`）。两笔公开事件均记录 Pump → Meteora，
+实际投入为 `0.025 SOL`，事件预计利润分别等于实际 WSOL 增量。网络费已包含优先费，实付 tip
+单独扣除；交易者原生 SOL 每笔扣减 `10,090` lamports，等于该笔网络费加实付 tip。
+
+两笔合计毛利润 `437,584` lamports（`0.000437584 SOL`），扣除各自网络费和实付 tip 后为
+`417,404` lamports（`0.000417404 SOL`）。这不是整轮盈利：同轮全部交易及 ATA 创建手续费计入后、
+不计可回收账户租金的净结果为 `-41,223,616` lamports（`-0.041223616 SOL`）。
+
+公开池地址、余额、事件字节、费用与 CU 已追加至既有
+[`tests/fixtures/mainnet-execution-milestones.json`](../tests/fixtures/mainnet-execution-milestones.json)，
+继续由 `npm run test:mainnet-milestones:offline` 检查本地样本一致性，并由既有只读
+`test:mainnet-milestones` 验证历史交易证据。本条没有新增自动广播或钱包加载入口。
+未保存交易边界前完整协议账户状态，不能将该记录当作可直接确定性回放的 Surfpool 历史快照。
+
+截至本条，机器可读样本共十笔成功交易，合计毛利润 `1,179,501` lamports；扣除这些成功交易
+各自网络费和已记录实付 tip 后为 `1,113,016` lamports。这里只汇总已固定的成功样本，不代表
+系统累计或整轮收益。本条不记录触发交易、事件门槛、Burst 参数、抢占规则、端点、凭据或钱包文件。
+
 ## 动态金额上线前：固定金额成功回归语料
 
 以下七笔主网成功交易来自动态金额模式引入前的一轮固定金额执行测试。这里仅固定公开交易签名，

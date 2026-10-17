@@ -152,6 +152,82 @@
         "earlyStopUsed": false,
         "eventBase64": "Mg0roTPt8SYAQEtMAAAAAABAeH0BAAAAAEB4fQEAAAAAQHh9AQAAAAAoKnMAAAAAAONpcwAAAAAAuz8AAAAAAAACAQAA"
       }
+    },
+    {
+      "signature": "24HkWA3A6wMbQVRW7fdTzt1o5Enx2LnwgeAvg4AqpHEubdJ142GEWGVMBUPTPTcs6LxpRykkDgS47sbaw5Td7ock",
+      "slot": 457974740,
+      "transactionIndex": 711,
+      "blockTime": 1792226675,
+      "wsolProfitLamports": "207203",
+      "feeLamports": 5090,
+      "tipLamports": 5000,
+      "tipRecipient": "2nyhqdwKcJZR2vcqCyrYsaPVdAnFoJjiksCXJ7hfEYgD",
+      "netProfitLamports": "197113",
+      "nativePayerDebitLamports": "10090",
+      "preWsolBalance": "253553049",
+      "postWsolBalance": "253760252",
+      "targetTokenBalancesUnchanged": true,
+      "computeUnitsConsumed": 253194,
+      "targetMint": "AeLonprCt3y4dZEWEeRTkPqnUPW2FngSD2YeUmPP6GDk",
+      "pumpPool": "8TVM7UJXk3PZnUj1tPzxYyNbqhsEyKEqPyHVbp5gY3aQ",
+      "meteoraPool": "AHKz4Ywe5nba7w36FzKHZrugDWjA7qnTEaPESWhVvBqb",
+      "evidence": {
+        "level": "transaction-and-program-event",
+        "historicalPrestateAvailable": false
+      },
+      "dynamicSelection": {
+        "direction": "pump-to-meteora",
+        "minWsolAmountIn": "5000000",
+        "maxWsolAmountIn": "25000000",
+        "balanceLimitedMax": "25000000",
+        "largestCompleteAmount": "25000000",
+        "actualWsolAmountIn": "25000000",
+        "expectedWsolAmountOut": "25207203",
+        "expectedProfitLamports": "207203",
+        "visitedBins": 1,
+        "boundaryCandidates": 0,
+        "interiorCandidates": 0,
+        "earlyStopUsed": false,
+        "eventBase64": "Mg0roTPt8SYAQEtMAAAAAABAeH0BAAAAAEB4fQEAAAAAQHh9AQAAAABAeH0BAAAAAKOhgAEAAAAAYykDAAAAAAABAAAA"
+      }
+    },
+    {
+      "signature": "37JwTSkodH7xgLnK3LjTt5MUXXQbmrP39qQpcopa2pDzcUNqMTdjuey2EoG4x6qjGCFE1r4rPp1KBmfSxH4GWLec",
+      "slot": 457975617,
+      "transactionIndex": 932,
+      "blockTime": 1792226863,
+      "wsolProfitLamports": "230381",
+      "feeLamports": 5090,
+      "tipLamports": 5000,
+      "tipRecipient": "3KCKozbAaF75qEU33jtzozcJ29yJuaLJTy2jFdzUY8bT",
+      "netProfitLamports": "220291",
+      "nativePayerDebitLamports": "10090",
+      "preWsolBalance": "253760252",
+      "postWsolBalance": "253990633",
+      "targetTokenBalancesUnchanged": true,
+      "computeUnitsConsumed": 254631,
+      "targetMint": "AeLonprCt3y4dZEWEeRTkPqnUPW2FngSD2YeUmPP6GDk",
+      "pumpPool": "8TVM7UJXk3PZnUj1tPzxYyNbqhsEyKEqPyHVbp5gY3aQ",
+      "meteoraPool": "AHKz4Ywe5nba7w36FzKHZrugDWjA7qnTEaPESWhVvBqb",
+      "evidence": {
+        "level": "transaction-and-program-event",
+        "historicalPrestateAvailable": false
+      },
+      "dynamicSelection": {
+        "direction": "pump-to-meteora",
+        "minWsolAmountIn": "5000000",
+        "maxWsolAmountIn": "25000000",
+        "balanceLimitedMax": "25000000",
+        "largestCompleteAmount": "25000000",
+        "actualWsolAmountIn": "25000000",
+        "expectedWsolAmountOut": "25230381",
+        "expectedProfitLamports": "230381",
+        "visitedBins": 1,
+        "boundaryCandidates": 0,
+        "interiorCandidates": 0,
+        "earlyStopUsed": false,
+        "eventBase64": "Mg0roTPt8SYAQEtMAAAAAABAeH0BAAAAAEB4fQEAAAAAQHh9AQAAAABAeH0BAAAAAC38gAEAAAAA7YMDAAAAAAABAAAA"
+      }
     }
   ],
   "rollback": {
