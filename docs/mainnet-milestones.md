@@ -175,6 +175,45 @@ npm run test:mainnet-milestones:offline
 各自网络费和已记录实付 tip 后为 `1,113,016` lamports。这里只汇总已固定的成功样本，不代表
 系统累计或整轮收益。本条不记录触发交易、事件门槛、Burst 参数、抢占规则、端点、凭据或钱包文件。
 
+## 2026-11-12：新增 Meteora → Pump 动态金额主网成功样本
+
+- Program ID：`RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51`
+- 结果：有界动态金额指令完成一笔 Meteora → Pump 盈利原子执行，交易者目标 Token 余额恢复至执行前状态。
+- 证据：只读取得该笔原始交易，核对成功状态、Program 调用、`DynamicAmountSelected` 公开事件、
+  WSOL 与原生 SOL 余额变化；落链位置与本轮 Monitor 完整结果一致。
+
+| 交易 | 落链 slot | 区块内索引 | 实际投入 | 毛利润 | 毛收益率 | 网络费 | 实付 tip | 净利润 | 净收益率 | CU |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| [4x8a8xHm…UDWG62y](https://solscan.io/tx/4x8a8xHmWVKXt2xaSVgQnh4rWfsCubyDmXAAFsQ1cEMUrJoZg89PWVSh8ZBFL3krpJcnzVTNXuPus2pbcUDWG62y) | 468,184,099 | 271 | 27,020,682 | 2,909,351 | 10.767126% | 5,105 | 5,000 | 2,899,246 | 10.729729% | 330,328 |
+
+金额单位为 lamports，区块内索引为零基。链上 `blockTime` 为 `2026-11-11 16:05:50 UTC`
+（北京时间 `2026-11-12 00:05:50`），只有秒级精度，不代表精确到毫秒的执行时间。
+WSOL 余额由 `253,990,633` 增至 `256,899,984`；交易者原生 SOL 扣减 `10,105` lamports，
+等于网络费加实付 tip。净利润为 `0.002899246 SOL`，tip 不重复计入网络费。
+
+公开事件显示搜索范围为 `5,000,000～250,000,000` lamports，余额上限为 `250,000,000`，
+完整报价上界和实际选择金额均为 `27,020,682`；预计输出 `29,930,033`、预计利润 `2,909,351`，
+与实际 WSOL 增量一致。事件记录 `visitedBins=16`、`boundaryCandidates=6`、
+`interiorCandidates=0`、`earlyStopUsed=false`。该样本用于检验大于最小金额的选择、完整报价
+上界、Meteora → Pump 真实 CPI、Token 余额恢复及费用扣除；不能据此扩大 Bin 或 CU 边界。
+
+机器可读事实、公开池地址、余额和事件原始字节已追加至
+[`tests/fixtures/mainnet-execution-milestones.json`](../tests/fixtures/mainnet-execution-milestones.json)，
+由现有离线一致性检查及只读历史交易回归逐笔读取，无新增发送或钱包加载入口。
+未保存交易边界前完整协议账户状态，`historicalPrestateAvailable=false`，不能将当前池账户或
+单纯修改本地 slot 当作该笔交易的确定性历史反事实回放。
+
+运行侧背景：本轮配置了 `shred-early`，但这笔成功交易来自 Yellowstone 的 executed 回退触发。
+此标签依据 Searcher/Monitor 运行证据，不能将本笔记作 Shred 预测提前触发验收通过。
+本文不复制触发交易、Burst 参数、事件门槛、端点、凭据、钱包文件或私有策略。
+
+本笔成功不代表整轮盈利：同轮全部套利交易扣除网络费和实付 tip 后为 `-3,063,394` lamports；
+另计 ATA 维护手续费 `85,000` 后为 `-3,148,394` lamports，独立锁定的可退租金
+`25,735,280` lamports 不计作交易手续费。这里只把该笔成功的公开执行事实固定为回归样本。
+
+截至本条，机器可读样本共十一笔成功交易，合计毛利润 `4,088,852` lamports；扣除这些成功交易
+各自网络费和已记录实付 tip 后为 `4,012,262` lamports。这不是系统累计或整轮净收益。
+
 ## 动态金额上线前：固定金额成功回归语料
 
 以下七笔主网成功交易来自动态金额模式引入前的一轮固定金额执行测试。这里仅固定公开交易签名，
