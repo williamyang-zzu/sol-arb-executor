@@ -251,6 +251,43 @@ ATA 实际维护手续费及租金支出／退款尚未完整核实，不包含�
 截至本条，机器可读样本共十二笔成功交易，合计毛利润 `12,817,050` lamports；扣除这些成功
 交易各自网络费和已记录实付 tip 后为 `12,730,355` lamports。这不是系统累计或整轮净收益。
 
+## 2026-11-21：新增 Yellowstone 模式动态金额主网盈利执行样本
+
+- Program ID：`RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51`
+- 结果：动态金额指令选择本次公开搜索范围的上界，完成 Meteora → Pump 盈利原子执行；交易者目标 Token 余额恢复至执行前状态。
+- 证据：复用已留存的 finalized 原始交易与完整区块，核对成功状态、Program 调用、`DynamicAmountSelected` 事件、WSOL／原生 SOL 余额、实付 tip 和零基区块索引。本次补录没有新增 RPC 请求或发送交易。
+
+| 交易 | 落链 slot | 区块内索引 | 实际投入 | 毛利润 | 毛收益率 | 网络费 | 实付 tip | 净利润 | 净收益率 | CU |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| [5pqaVzMk…XX3JDkD](https://solscan.io/tx/5pqaVzMkauCK7PMpJtqL7KcBGPESb2tGq7VcPdPFS51gTwx3PBN7JFCMbmzZgfqh1o6bpJFFUR4414v9UXX3JDkD) | 472,099,275 | 263 | 250,000,000 | 2,411,939 | 0.964776% | 5,105 | 5,000 | 2,401,834 | 0.960734% | 332,567 |
+
+金额单位为 lamports，区块内索引为零基（本区块第 `264` 笔交易）。链上 `blockTime` 为
+`2026-11-21 10:06:03 UTC`（北京时间 `18:06:03`），只有秒级精度，不代表精确到毫秒的执行时间。
+WSOL 余额由 `266,246,747` 增至 `268,658,686`；交易者原生 SOL 扣减 `10,105` lamports，
+等于网络费加实付 tip。单笔净利润为 `0.002401834 SOL`，网络费已包含优先费，tip 单独扣除。
+
+公开事件的搜索范围为 `5,000,000～250,000,000` lamports；余额上限、完整报价上界和实际
+选择金额均为 `250,000,000`。预计输出 `252,411,939`、预计利润 `2,411,939` 与实际 WSOL
+增量一致；`visitedBins=7`、`boundaryCandidates=5`、`interiorCandidates=0`、
+`earlyStopUsed=false`。本样本可用于多 Bin 的 Meteora → Pump 执行、动态金额上界选择、
+目标 Token 余额恢复和费用扣除回归；不能据此改变 Bin/CU 边界或推断其他状态也能盈利。
+
+运行侧来源标签为 Yellowstone executed 正常路径，依据留存的 Searcher／Monitor 记录，
+不是 Shred 预测提前触发样本。本文沿用执行事实边界，不复制触发交易、价差归因、事件门槛、
+Burst 参数、发送端点、凭据、钱包文件或私有策略。
+
+公开交易事实、池地址、余额和事件原始字节已追加至
+[`tests/fixtures/mainnet-execution-milestones.json`](../tests/fixtures/mainnet-execution-milestones.json)，
+沿用既有离线样本一致性检查及只读历史交易回归接口。未保存交易边界前完整协议账户字节，
+`historicalPrestateAvailable=false`；单笔事件和固定金额分腿数值复核均不构成完整历史账户重放。
+
+本轮全部 `470` 笔套利交易扣除各自网络费和实付 tip 后合计为 `7,589` lamports；
+ATA 实际维护手续费及租金支出／回收仍未逐笔核账，不包含在合计中，不能据此认定含账户管理
+费用后的整轮盈利。该单笔毛利润、单笔净利润与整轮套利交易净额是不同统计范围。
+
+截至本条，机器可读样本共十三笔成功交易，合计毛利润 `15,228,989` lamports；扣除这些成功
+交易各自网络费和已记录实付 tip 后为 `15,132,189` lamports。这不是系统累计或整轮净收益。
+
 ## 动态金额上线前：固定金额成功回归语料
 
 以下七笔主网成功交易来自动态金额模式引入前的一轮固定金额执行测试。这里仅固定公开交易签名，
