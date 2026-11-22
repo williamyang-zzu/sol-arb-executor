@@ -288,6 +288,45 @@ ATA 实际维护手续费及租金支出／回收仍未逐笔核账，不包含�
 截至本条，机器可读样本共十三笔成功交易，合计毛利润 `15,228,989` lamports；扣除这些成功
 交易各自网络费和已记录实付 tip 后为 `15,132,189` lamports。这不是系统累计或整轮净收益。
 
+## 2026-11-22：新增 Yellowstone 模式动态金额非上界主网盈利执行样本
+
+- Program ID：`RoroSC7cukdtr1WFantguWKcZ9KTwqjnMRJYo9EcL51`
+- 结果：动态金额选择低于搜索上界的输入，完成 Meteora → Pump 盈利原子执行；交易者目标 Token 余额恢复至执行前状态。
+- 证据：补录时只读获取 finalized 原始交易及区块签名列表，核对成功状态、Program 调用、`DynamicAmountSelected` 事件、WSOL／原生 SOL 余额、实际 tip 和零基索引，并与已留存 Monitor 明细交叉核对。没有签名、发送交易或账户操作。
+
+| 交易 | 落链 slot | 区块内索引 | 实际投入 | 毛利润 | 毛收益率 | 网络费 | 实付 tip | 净利润 | 净收益率 | CU |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| [3HwUUZj6…Ko2iyquD](https://solscan.io/tx/3HwUUZj65DzAkwGGZGwSG2fppHco794KzvazN3fbuBPkueN3GowvTgwPLTqm6gSXdJ1PFzPtpwgGQjeMKo2iyquD) | 472,484,050 | 198 | 33,432,734 | 31,717 | 0.094868% | 5,105 | 5,000 | 21,612 | 0.064643% | 241,346 |
+
+金额单位为 lamports，区块内索引为零基（本区块第 `199` 笔）。链上 `blockTime` 为
+`2026-11-22 09:04:56 UTC`（北京时间 `17:04:56`），只有秒级精度，不代表精确到毫秒的执行时刻。
+WSOL 余额由 `268,658,686` 增至 `268,690,403`；交易者原生 SOL 扣减 `10,105` lamports，
+等于网络费加实付 tip。单笔净利润为 `0.000021612 SOL`，网络费已包含优先费，tip 单独扣除。
+目标 Token 为 HUSS，mint `3umHFkiMHyphCkLxtbf8Aabie8r5hxn86QeBAovTpump`；余额 `0` → `0`。
+
+公开事件的搜索范围为 `5,000,000～250,000,000` lamports；余额上限和完整报价上界均为
+`250,000,000`，但实际选择 `33,432,734`（`0.033432734 SOL`），并未选择最大金额。
+预计输出 `33,464,451`、预计利润 `31,717` 与实际 WSOL 增量一致；
+`visitedBins=2`、`boundaryCandidates=1`、`interiorCandidates=0`、
+`earlyStopUsed=false`。该样本固定非上界动态金额选择、Meteora → Pump 实际执行、
+目标 Token 余额恢复和费用扣除事实；不据此断言完整历史搜索过程、其他候选金额结果或未来盈利。
+
+运行侧来源标签为 Yellowstone executed 正常路径，依据已留存 Searcher／Monitor 记录。
+沿用执行事实边界，不复制触发交易、冲击归因、事件门槛、Burst 参数、发送端点、凭据、
+钱包文件或私有策略。
+
+公开交易事实、池地址、余额和原始事件字节已追加至
+[`tests/fixtures/mainnet-execution-milestones.json`](../tests/fixtures/mainnet-execution-milestones.json)，
+沿用既有离线一致性及只读历史证据回归接口。未留存交易边界前完整协议账户字节，
+`historicalPrestateAvailable=false`，不是完整历史账户重放。
+
+同轮全部 `924` 笔套利交易扣除各自网络费和实际 tip 后为 **`-4,690,303` lamports**；
+ATA 实际维护费用及租金支付／回收尚未完整核账，均不包含在该合计中。不能把这笔单独成功
+描述成整轮盈利，单笔净利润和整轮净额是不同统计范围。
+
+截至本条，机器可读样本共十四笔成功交易，合计毛利润 `15,260,706` lamports；扣除这些成功
+交易各自网络费和已记录实付 tip 后为 `15,153,801` lamports。这不是系统累计或整轮净收益。
+
 ## 动态金额上线前：固定金额成功回归语料
 
 以下七笔主网成功交易来自动态金额模式引入前的一轮固定金额执行测试。这里仅固定公开交易签名，
